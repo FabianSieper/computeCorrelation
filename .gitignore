@@ -6,7 +6,7 @@ data/
 time_diff_*.txt
 
 # Go build artifacts
-*.mod
+.mod
 go.sum
 
 # Temporary files
