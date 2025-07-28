@@ -645,13 +645,17 @@ func scanAvailableChannels(files []string) (map[uint16]int, error) {
 			return nil, fmt.Errorf("failed to open file %s: %v", filepath, err)
 		}
 
-		// Find TIME_TAG blocks
-		timeTagBlocks, err := findSITTBlocks(file, 0x53495454) // 'SITT'
-		file.Close()
-		if err != nil {
-			return nil, fmt.Errorf("failed to find SITT blocks in %s: %v", filepath, err)
+		// Find TIME_TAG blocks (try different block types like in readTimeTagFile)
+		blockTypes := []uint32{0x01, 0x02, 0x03}
+		var timeTagBlocks []SITTBlockInfo
+		for _, blockType := range blockTypes {
+			blocks, err := findSITTBlocks(file, blockType)
+			if err == nil {
+				timeTagBlocks = append(timeTagBlocks, blocks...)
+			}
 		}
-
+		file.Close()
+		
 		if len(timeTagBlocks) == 0 {
 			continue // No TIME_TAG blocks in this file
 		}

@@ -1,7 +1,3 @@
-# Binaries
-*.exe
-computeCorrelation
-
 # Data files
 data/
 *.ttbin
