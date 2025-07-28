@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"sync"
 )
 
 // TimeTag represents a single time tag entry
@@ -24,13 +23,6 @@ type TimeDiff struct {
 	Channel1   uint16
 	Channel2   uint16
 	Diff       int64
-}
-
-// SITTBlockInfo holds information about a SITT block
-type SITTBlockInfo struct {
-	Position uint64
-	Type     uint32
-	Length   uint32
 }
 
 func main() {
@@ -86,49 +78,18 @@ func getTimeTaFiles(dataDir string) ([]string, error) {
 	return files, nil
 }
 
-// processFiles processes all files and calculates time differences using parallel processing
+// processFiles processes all files and calculates time differences
 func processFiles(files []string, channel1, channel2 uint16) ([]TimeDiff, error) {
 	var allTimeTags []TimeTag
-	var mu sync.Mutex
-	var wg sync.WaitGroup
 
-	// Channel for collecting results from goroutines
-	results := make(chan []TimeTag, len(files))
-	errors := make(chan error, len(files))
-
-	// Process files in parallel
+	// Read all time tags from all files
 	for _, file := range files {
-		wg.Add(1)
-		go func(filename string) {
-			defer wg.Done()
-			fmt.Printf("Processing file: %s\n", filename)
-			
-			timeTags, err := readTimeTagFile(filename)
-			if err != nil {
-				errors <- fmt.Errorf("error reading %s: %v", filename, err)
-				return
-			}
-			results <- timeTags
-		}(file)
-	}
-
-	// Wait for all goroutines to complete
-	wg.Wait()
-	close(results)
-	close(errors)
-
-	// Check for errors
-	select {
-	case err := <-errors:
-		return nil, err
-	default:
-	}
-
-	// Collect all results
-	for timeTags := range results {
-		mu.Lock()
+		fmt.Printf("Processing file: %s\n", file)
+		timeTags, err := readTimeTagFile(file)
+		if err != nil {
+			return nil, fmt.Errorf("error reading %s: %v", file, err)
+		}
 		allTimeTags = append(allTimeTags, timeTags...)
-		mu.Unlock()
 	}
 
 	fmt.Printf("Total time tags read: %d\n", len(allTimeTags))
@@ -149,11 +110,19 @@ func processFiles(files []string, channel1, channel2 uint16) ([]TimeDiff, error)
 		fmt.Printf("  Channel %d: %d Events\n", ch, count)
 	}
 
+	// Print first few events for debugging
+	fmt.Println("First events (chronologically sorted):")
+	for i, tag := range allTimeTags {
+		if i < 10 { // Show first 10 events
+			fmt.Printf("  Event %d: Channel %d, Timestamp %d\n", i+1, tag.Channel, tag.Timestamp)
+		}
+	}
+
 	// Calculate time differences
 	return calculateTimeDiffs(allTimeTags, channel1, channel2), nil
 }
 
-// readTimeTagFile reads time tags from a .ttbin file using optimized SITT format parsing
+// readTimeTagFile reads time tags from a .ttbin file using SITT format parsing
 func readTimeTagFile(filename string) ([]TimeTag, error) {
 	file, err := os.Open(filename)
 	if err != nil {
@@ -186,7 +155,14 @@ func readTimeTagFile(filename string) ([]TimeTag, error) {
 	return timeTags, nil
 }
 
-// findSITTBlocks finds all SITT blocks using memory-efficient streaming approach
+// SITTBlockInfo holds information about a SITT block
+type SITTBlockInfo struct {
+	Position uint64
+	Type     uint32
+	Length   uint32
+}
+
+// findSITTBlocks finds all SITT blocks of a specific type in the file using streaming approach
 func findSITTBlocks(file *os.File, blockType uint32) ([]SITTBlockInfo, error) {
 	var blocks []SITTBlockInfo
 	
@@ -200,11 +176,11 @@ func findSITTBlocks(file *os.File, blockType uint32) ([]SITTBlockInfo, error) {
 	file.Seek(0, io.SeekStart)
 	
 	// Use buffered reader for better I/O performance
-	const bufferSize = 1024 * 1024 // 1MB buffer for large files
+	const bufferSize = 64 * 1024 // 64KB buffer
 	reader := bufio.NewReaderSize(file, bufferSize)
 	
 	var position int64 = 0
-	buffer := make([]byte, 64*1024) // 64KB sliding window
+	buffer := make([]byte, 16*1024) // 16KB sliding window
 	overlap := 16 // Overlap to catch patterns across buffer boundaries
 	
 	for position < fileSize {
@@ -238,16 +214,14 @@ func findSITTBlocks(file *os.File, blockType uint32) ([]SITTBlockInfo, error) {
 		}
 		
 		// Move overlap data to beginning for next iteration
-		if totalBytes >= overlap {
-			copy(buffer[:overlap], buffer[totalBytes-overlap:totalBytes])
-		}
+		copy(buffer[:overlap], buffer[totalBytes-overlap:totalBytes])
 		position += int64(n)
 	}
 
 	return blocks, nil
 }
 
-// readTimeTagDataAtPosition reads time tag data from a specific position with optimized parsing
+// readTimeTagDataAtPosition reads time tag data from a specific position
 func readTimeTagDataAtPosition(file *os.File, position uint64, length uint32) ([]TimeTag, error) {
 	// Seek to data position (skip header)
 	file.Seek(int64(position+16), io.SeekStart)
@@ -258,52 +232,49 @@ func readTimeTagDataAtPosition(file *os.File, position uint64, length uint32) ([
 	}
 	dataSize -= 12 // Rest of header
 
-	// Pre-allocate slice with estimated capacity
-	estimatedEvents := int(dataSize / 16) // Each event is typically 16 bytes
-	timeTags := make([]TimeTag, 0, estimatedEvents)
-
-	// Use buffered reader for better performance
-	reader := bufio.NewReader(file)
 	data := make([]byte, dataSize)
-	_, err := io.ReadFull(reader, data)
+	_, err := file.Read(data)
 	if err != nil {
 		return nil, err
 	}
 
+	var timeTags []TimeTag
+
 	fmt.Printf("    Debug: Reading %d bytes of time tag data\n", dataSize)
 
-	// Optimized parsing: process data in 16-byte chunks
+	// Parse all 16-byte entries, trying different interpretations
 	for i := 0; i < len(data); i += 16 {
 		if i+16 <= len(data) {
 			// Try multiple parsing approaches to catch all data
-			var validTag *TimeTag
 
 			// Approach 1: Channel at position 4-5, timestamp at 8-11
 			channel1 := binary.LittleEndian.Uint16(data[i+4 : i+6])
 			timestamp1 := uint64(binary.LittleEndian.Uint32(data[i+8 : i+12]))
 
+			// Approach 2: Channel at position 0-1, timestamp at 4-7
+			channel2 := binary.LittleEndian.Uint16(data[i : i+2])
+			timestamp2 := uint64(binary.LittleEndian.Uint32(data[i+4 : i+8]))
+
+			// Approach 3: Channel at position 8-9, timestamp at 12-15
+			channel3 := binary.LittleEndian.Uint16(data[i+8 : i+10])
+			timestamp3 := uint64(binary.LittleEndian.Uint32(data[i+12 : i+16]))
+
+			// Use whichever approach gives reasonable values
 			if channel1 > 0 && channel1 < 1000 && timestamp1 > 0 {
-				validTag = &TimeTag{Timestamp: timestamp1, Channel: channel1}
-			} else {
-				// Approach 2: Channel at position 0-1, timestamp at 4-7
-				channel2 := binary.LittleEndian.Uint16(data[i : i+2])
-				timestamp2 := uint64(binary.LittleEndian.Uint32(data[i+4 : i+8]))
-
-				if channel2 > 0 && channel2 < 1000 && timestamp2 > 0 {
-					validTag = &TimeTag{Timestamp: timestamp2, Channel: channel2}
-				} else {
-					// Approach 3: Channel at position 8-9, timestamp at 12-15
-					channel3 := binary.LittleEndian.Uint16(data[i+8 : i+10])
-					timestamp3 := uint64(binary.LittleEndian.Uint32(data[i+12 : i+16]))
-
-					if channel3 > 0 && channel3 < 1000 && timestamp3 > 0 {
-						validTag = &TimeTag{Timestamp: timestamp3, Channel: channel3}
-					}
-				}
-			}
-
-			if validTag != nil {
-				timeTags = append(timeTags, *validTag)
+				timeTags = append(timeTags, TimeTag{
+					Timestamp: timestamp1,
+					Channel:   channel1,
+				})
+			} else if channel2 > 0 && channel2 < 1000 && timestamp2 > 0 {
+				timeTags = append(timeTags, TimeTag{
+					Timestamp: timestamp2,
+					Channel:   channel2,
+				})
+			} else if channel3 > 0 && channel3 < 1000 && timestamp3 > 0 {
+				timeTags = append(timeTags, TimeTag{
+					Timestamp: timestamp3,
+					Channel:   channel3,
+				})
 			}
 		}
 	}
@@ -312,35 +283,29 @@ func readTimeTagDataAtPosition(file *os.File, position uint64, length uint32) ([
 	return timeTags, nil
 }
 
-// calculateTimeDiffs calculates time differences between consecutive events with optimized filtering
+// calculateTimeDiffs calculates time differences between consecutive events of specified channels
 func calculateTimeDiffs(timeTags []TimeTag, channel1, channel2 uint16) []TimeDiff {
-	// Pre-filter and pre-allocate for better performance
-	relevantEvents := make([]TimeTag, 0, len(timeTags)/10) // Estimate 10% relevance
-	
+	var timeDiffs []TimeDiff
+
+	// Filter events for the specified channels and sort by timestamp
+	var relevantEvents []TimeTag
 	for _, tag := range timeTags {
 		if tag.Channel == channel1 || tag.Channel == channel2 {
 			relevantEvents = append(relevantEvents, tag)
 		}
 	}
 
-	// Events are already sorted by timestamp from processFiles
+	// Sort by timestamp to ensure chronological order
+	sort.Slice(relevantEvents, func(i, j int) bool {
+		return relevantEvents[i].Timestamp < relevantEvents[j].Timestamp
+	})
+
 	fmt.Printf("Relevant events (sorted): %d\n", len(relevantEvents))
-	
-	if len(relevantEvents) < 10 {
-		// Show all events if few
-		for i, event := range relevantEvents {
-			fmt.Printf("  Event %d: Channel %d, Timestamp %d\n", i+1, event.Channel, event.Timestamp)
-		}
-	} else {
-		// Show first 10 events
-		for i := 0; i < 10; i++ {
-			event := relevantEvents[i]
+	for i, event := range relevantEvents {
+		if i < 10 { // Show first 10
 			fmt.Printf("  Event %d: Channel %d, Timestamp %d\n", i+1, event.Channel, event.Timestamp)
 		}
 	}
-
-	// Pre-allocate timeDiffs slice
-	timeDiffs := make([]TimeDiff, 0, len(relevantEvents)-1)
 
 	// Calculate differences between consecutive events
 	for i := 1; i < len(relevantEvents); i++ {
@@ -361,7 +326,7 @@ func calculateTimeDiffs(timeTags []TimeTag, channel1, channel2 uint16) []TimeDif
 	return timeDiffs
 }
 
-// saveTimeDiffs saves time differences to a text file with buffered writing
+// saveTimeDiffs saves time differences to a text file
 func saveTimeDiffs(timeDiffs []TimeDiff, filename string) error {
 	file, err := os.Create(filename)
 	if err != nil {
@@ -369,8 +334,7 @@ func saveTimeDiffs(timeDiffs []TimeDiff, filename string) error {
 	}
 	defer file.Close()
 
-	// Use large buffer for better write performance
-	writer := bufio.NewWriterSize(file, 64*1024)
+	writer := bufio.NewWriter(file)
 	defer writer.Flush()
 
 	// Write header
@@ -378,7 +342,7 @@ func saveTimeDiffs(timeDiffs []TimeDiff, filename string) error {
 	fmt.Fprintf(writer, "# Format: Timestamp1, Timestamp2, Channel1, Channel2, TimeDiff(ns)\n")
 	fmt.Fprintf(writer, "# TimeDiff = Timestamp2 - Timestamp1\n\n")
 
-	// Write data efficiently
+	// Write data
 	for _, diff := range timeDiffs {
 		fmt.Fprintf(writer, "%d,%d,%d,%d,%d\n",
 			diff.Timestamp1, diff.Timestamp2, diff.Channel1, diff.Channel2, diff.Diff)
