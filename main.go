@@ -27,30 +27,30 @@ type TimeDiff struct {
 
 func main() {
 	// Get channel numbers from user input
-	fmt.Print("Geben Sie die erste Kanalnummer ein: ")
+	fmt.Print("Enter first channel number: ")
 	var channel1 uint16
 	fmt.Scanln(&channel1)
 
-	fmt.Print("Geben Sie die zweite Kanalnummer ein: ")
+	fmt.Print("Enter second channel number: ")
 	var channel2 uint16
 	fmt.Scanln(&channel2)
 
 	// Get all .ttbin files from data directory
 	files, err := getTimeTaFiles("data")
 	if err != nil {
-		fmt.Printf("Fehler beim Lesen der Dateien: %v\n", err)
+		fmt.Printf("Error reading files: %v\n", err)
 		return
 	}
 
 	if len(files) == 0 {
-		fmt.Println("Keine .ttbin Dateien im data/ Verzeichnis gefunden.")
+		fmt.Println("No .ttbin files found in data/ directory.")
 		return
 	}
 
 	// Process all files and calculate time differences
 	timeDiffs, err := processFiles(files, channel1, channel2)
 	if err != nil {
-		fmt.Printf("Fehler beim Verarbeiten der Dateien: %v\n", err)
+		fmt.Printf("Error processing files: %v\n", err)
 		return
 	}
 
@@ -58,11 +58,11 @@ func main() {
 	outputFile := fmt.Sprintf("time_diff_ch%d_ch%d.txt", channel1, channel2)
 	err = saveTimeDiffs(timeDiffs, outputFile)
 	if err != nil {
-		fmt.Printf("Fehler beim Speichern der Ergebnisse: %v\n", err)
+		fmt.Printf("Error saving results: %v\n", err)
 		return
 	}
 
-	fmt.Printf("Erfolgreich %d Zeitdifferenzen berechnet und in '%s' gespeichert.\n",
+	fmt.Printf("Successfully calculated %d time differences and saved to '%s'.\n",
 		len(timeDiffs), outputFile)
 }
 
@@ -84,15 +84,15 @@ func processFiles(files []string, channel1, channel2 uint16) ([]TimeDiff, error)
 
 	// Read all time tags from all files
 	for _, file := range files {
-		fmt.Printf("Verarbeite Datei: %s\n", file)
+		fmt.Printf("Processing file: %s\n", file)
 		timeTags, err := readTimeTagFile(file)
 		if err != nil {
-			return nil, fmt.Errorf("fehler beim Lesen von %s: %v", file, err)
+			return nil, fmt.Errorf("error reading %s: %v", file, err)
 		}
 		allTimeTags = append(allTimeTags, timeTags...)
 	}
 
-	fmt.Printf("Insgesamt %d Time Tags gelesen\n", len(allTimeTags))
+	fmt.Printf("Total time tags read: %d\n", len(allTimeTags))
 
 	// Sort all events by timestamp to ensure proper chronological order across files
 	sort.Slice(allTimeTags, func(i, j int) bool {
@@ -105,16 +105,16 @@ func processFiles(files []string, channel1, channel2 uint16) ([]TimeDiff, error)
 		channelCounts[tag.Channel]++
 	}
 
-	fmt.Println("Gefundene Kanäle:")
+	fmt.Println("Found channels:")
 	for ch, count := range channelCounts {
-		fmt.Printf("  Kanal %d: %d Events\n", ch, count)
+		fmt.Printf("  Channel %d: %d Events\n", ch, count)
 	}
 
 	// Print first few events for debugging
-	fmt.Println("Erste Events (chronologisch sortiert):")
+	fmt.Println("First events (chronologically sorted):")
 	for i, tag := range allTimeTags {
 		if i < 10 { // Show first 10 events
-			fmt.Printf("  Event %d: Kanal %d, Timestamp %d\n", i+1, tag.Channel, tag.Timestamp)
+			fmt.Printf("  Event %d: Channel %d, Timestamp %d\n", i+1, tag.Channel, tag.Timestamp)
 		}
 	}
 
@@ -140,7 +140,7 @@ func readTimeTagFile(filename string) ([]TimeTag, error) {
 		}
 
 		if len(blocks) > 0 {
-			fmt.Printf("  Gefunden: %d Blöcke vom Typ 0x%x\n", len(blocks), blockType)
+			fmt.Printf("  Found: %d blocks of type 0x%x\n", len(blocks), blockType)
 		}
 
 		for _, block := range blocks {
@@ -273,10 +273,10 @@ func calculateTimeDiffs(timeTags []TimeTag, channel1, channel2 uint16) []TimeDif
 		return relevantEvents[i].Timestamp < relevantEvents[j].Timestamp
 	})
 
-	fmt.Printf("Relevante Events (sortiert): %d\n", len(relevantEvents))
+	fmt.Printf("Relevant events (sorted): %d\n", len(relevantEvents))
 	for i, event := range relevantEvents {
 		if i < 10 { // Show first 10
-			fmt.Printf("  Event %d: Kanal %d, Timestamp %d\n", i+1, event.Channel, event.Timestamp)
+			fmt.Printf("  Event %d: Channel %d, Timestamp %d\n", i+1, event.Channel, event.Timestamp)
 		}
 	}
 
@@ -311,7 +311,7 @@ func saveTimeDiffs(timeDiffs []TimeDiff, filename string) error {
 	defer writer.Flush()
 
 	// Write header
-	fmt.Fprintf(writer, "# Zeitdifferenzen zwischen aufeinanderfolgenden Events\n")
+	fmt.Fprintf(writer, "# Time differences between consecutive events\n")
 	fmt.Fprintf(writer, "# Format: Timestamp1, Timestamp2, Channel1, Channel2, TimeDiff(ns)\n")
 	fmt.Fprintf(writer, "# TimeDiff = Timestamp2 - Timestamp1\n\n")
 

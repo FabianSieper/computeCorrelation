@@ -9,8 +9,8 @@ echo.
 
 REM Check if computeCorrelation.exe exists
 if not exist "computeCorrelation.exe" (
-    echo FEHLER: computeCorrelation.exe nicht gefunden!
-    echo Stellen Sie sicher, dass Sie sich im richtigen Verzeichnis befinden.
+    echo ERROR: computeCorrelation.exe not found!
+    echo Make sure you are in the correct directory.
     echo.
     pause
     exit /b 1
@@ -18,8 +18,8 @@ if not exist "computeCorrelation.exe" (
 
 REM Check if data directory exists
 if not exist "data\" (
-    echo FEHLER: data\ Verzeichnis nicht gefunden!
-    echo Erstellen Sie einen 'data' Ordner und legen Sie Ihre .ttbin Dateien hinein.
+    echo ERROR: data\ directory not found!
+    echo Create a 'data' folder and place your .ttbin files in it.
     echo.
     pause
     exit /b 1
@@ -28,13 +28,31 @@ if not exist "data\" (
 REM Check if .ttbin files exist
 dir /b "data\*.ttbin" >nul 2>&1
 if errorlevel 1 (
-    echo WARNUNG: Keine .ttbin Dateien im data\ Verzeichnis gefunden!
-    echo Legen Sie Ihre .ttbin Dateien in den data\ Ordner.
+    echo WARNING: No .ttbin files found in data\ directory!
+    echo Please place your .ttbin files in the data folder first.
     echo.
+    pause
+    exit /b 1
+)
+
+echo Starting Timetag Correlation Analyzer...
+echo.
+
+REM Run the program
+computeCorrelation.exe
+
+REM Keep window open if there was an error
+if errorlevel 1 (
+    echo.
+    echo Program exited with an error.
     pause
 )
 
-echo Starte Timetag Correlation Analyzer...
+echo.
+echo Program completed successfully.
+echo Results have been saved to time_diff_chX_chY.txt files.
+echo.
+pauseecho Starte Timetag Correlation Analyzer...
 echo.
 
 REM Run the program

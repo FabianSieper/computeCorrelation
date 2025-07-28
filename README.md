@@ -1,43 +1,118 @@
 # Timetag Correlation Analyzer
 
-Dieses Go-Programm berechnet Zeitdifferenzen zwischen zwei Kanälen aus Timetag-Dateien (.ttbin Format).
+This Go program calculates time differences between two channels from timetag files (.ttbin format).
 
-## Funktionalität
+## Features
 
-Das Programm:
+The program:
 
-1. Liest alle .ttbin Dateien aus dem `data/` Ordner (lexikographisch sortiert)
-2. Extrahiert Timetag-Daten für zwei benutzerdefinierte Kanäle
-3. Berechnet die zeitlichen Differenzen zwischen aufeinanderfolgenden Events der beiden Kanäle
-4. Speichert die Ergebnisse in einer CSV-Datei
+1. Reads all .ttbin files from the `data/` directory (sorted lexicographically)
+2. Extracts timetag data for two user-specified channels
+3. Calculates time differences between consecutive events of the specified channels
+4. Saves results to a CSV file
 
-## Nutzung
+Key features:
 
-1. Kompilieren:
+- **Multiple files**: Automatically processes all .ttbin files in chronological order
+- **Streaming**: Efficient processing of large files through block-wise reading
+- **Correlation analysis**: Calculates time differences between all consecutive events of selected channels
+- **Channel overview**: Shows a summary of all found channels and event counts
+- **Cross-platform**: Works on Windows, macOS, and Linux
+
+## Installation & Usage
+
+### Windows (Recommended - No Go installation required)
+
+#### Option A: Using pre-compiled executable (easiest)
+
+1. Download or copy the `computeCorrelation.exe` file
+2. Create a folder for your data and place your .ttbin files in a subfolder called `data/`
+3. Double-click `start_windows.bat` or run:
+
+   ```cmd
+   computeCorrelation.exe
+   ```
+
+#### Option B: Using batch script
+
+1. Use the provided `start_windows.bat` script which includes error checking:
+
+   ```cmd
+   start_windows.bat
+   ```
+
+### macOS / Linux
+
+#### Option A: Using pre-compiled binary (if available)
+
+```bash
+chmod +x computeCorrelation
+./computeCorrelation
+```
+
+#### Option B: Compile from source
+
+1. Install Go from <https://golang.org/dl/>
+2. Compile:
 
    ```bash
    go build -o computeCorrelation main.go
    ```
 
-2. Ausführen:
+3. Run:
 
    ```bash
    ./computeCorrelation
    ```
 
-3. Das Programm fragt nach zwei Kanalnummern:
+### Building for Different Platforms
+
+If you need to create executables for different operating systems:
+
+```bash
+# For Windows (from any OS)
+GOOS=windows GOARCH=amd64 go build -o computeCorrelation.exe main.go
+
+# For macOS (from any OS)
+GOOS=darwin GOARCH=amd64 go build -o computeCorrelation main.go
+
+# For Linux (from any OS)
+GOOS=linux GOARCH=amd64 go build -o computeCorrelation main.go
+```
+
+## Usage Instructions
+
+1. Place your .ttbin files in a `data/` subdirectory
+2. Run the program using one of the methods above
+3. Enter the two channel numbers when prompted:
 
    ```text
-   Geben Sie die erste Kanalnummer ein: 258
-   Geben Sie die zweite Kanalnummer ein: 259
+   Enter first channel number: 258
+   Enter second channel number: 259
    ```
 
-## Ausgabe
+## File Structure
 
-Das Programm erstellt eine Datei namens `time_diff_ch<X>_ch<Y>.txt` mit folgender Struktur:
+Your project directory should look like this:
 
 ```text
-# Zeitdifferenzen zwischen Kanälen
+your-project/
+├── computeCorrelation.exe      (Windows executable)
+├── computeCorrelation          (macOS/Linux executable)
+├── start_windows.bat           (Windows launcher script)
+├── main.go                     (source code)
+└── data/                       (your .ttbin files)
+    ├── file1.ttbin
+    ├── file2.ttbin
+    └── ...
+```
+
+## Output Format
+
+The program creates a file named `time_diff_ch<X>_ch<Y>.txt` with the following structure:
+
+```text
+# Time differences between consecutive events
 # Format: Timestamp1, Timestamp2, Channel1, Channel2, TimeDiff(ns)
 # TimeDiff = Timestamp2 - Timestamp1
 
@@ -45,36 +120,31 @@ Das Programm erstellt eine Datei namens `time_diff_ch<X>_ch<Y>.txt` mit folgende
 ...
 ```
 
-Wobei:
+Where:
 
-- `timestamp1`: Zeitstempel des ersten Events
-- `timestamp2`: Zeitstempel des zweiten Events  
-- `channel1`: Kanalnummer des ersten Events
-- `channel2`: Kanalnummer des zweiten Events
-- `time_diff`: Zeitdifferenz in Nanosekunden (timestamp2 - timestamp1)
+- `timestamp1`: Timestamp of the first event
+- `timestamp2`: Timestamp of the second event  
+- `channel1`: Channel number of the first event
+- `channel2`: Channel number of the second event
+- `time_diff`: Time difference in nanoseconds (timestamp2 - timestamp1)
 
-## Dateiformat
+## File Format
 
-Das Programm erwartet .ttbin Dateien im SITT (SwissInstruments Time Tag) Format im `data/` Verzeichnis.
+The program expects .ttbin files in SITT (SwissInstruments Time Tag) format in the `data/` directory.
 
-## Features
+## Example Output
 
-- **Mehrere Dateien**: Verarbeitet automatisch alle .ttbin Dateien in chronologischer Reihenfolge
-- **Streaming**: Effiziente Verarbeitung großer Dateien durch blockweise Einlesen
-- **Korrelationsanalyse**: Berechnet Zeitdifferenzen zwischen allen aufeinanderfolgenden Events der gewählten Kanäle
-- **Kanalübersicht**: Zeigt eine Zusammenfassung aller gefundenen Kanäle und Event-Anzahlen
-
-## Beispielausgabe
-
-```
-Geben Sie die erste Kanalnummer ein: 262
-Geben Sie die zweite Kanalnummer ein: 261
-Verarbeite Datei: data/TimeTags-test_2025-07-08_161026-1.ttbin
-  Gefunden: 1 Time Tag Blöcke
-Verarbeite Datei: data/TimeTags-test_2025-07-08_161026.ttbin
-  Gefunden: 1 Time Tag Blöcke
-Insgesamt 2 Time Tags gelesen
-Gefundene Kanäle:
-  Kanal 262: 2 Events
-Erfolgreich 0 Zeitdifferenzen berechnet und in 'time_diff_ch262_ch261.txt' gespeichert.
+```text
+Enter first channel number: 262
+Enter second channel number: 261
+Processing file: data/TimeTags-test_2025-07-08_161026-1.ttbin
+  Found: 1 blocks of type 0x3
+Processing file: data/TimeTags-test_2025-07-08_161026.ttbin
+  Found: 1 blocks of type 0x3
+Total time tags read: 4
+Found channels:
+  Channel 262: 2 Events
+  Channel 261: 2 Events
+Relevant events (sorted): 4
+Successfully calculated 3 time differences and saved to 'time_diff_ch262_ch261.txt'.
 ```
