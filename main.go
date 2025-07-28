@@ -54,30 +54,91 @@ func main() {
 		return
 	}
 
-	// Get channel numbers from user input with validation
+	// Get all .ttbin files from data directory first to analyze available channels
+	files, err := getTimeTaFiles("data")
+	if err != nil {
+		fmt.Printf("ERROR: Failed to read files from data directory: %v\n", err)
+		fmt.Println("Please check that the data directory exists and is accessible.")
+		fmt.Println("\nPress Enter to exit...")
+		fmt.Scanln()
+		return
+	}
+
+	if len(files) == 0 {
+		fmt.Println("ERROR: No .ttbin files found in data/ directory.")
+		fmt.Println("Please place your .ttbin files in the data folder.")
+		fmt.Println("Supported file extension: .ttbin")
+		fmt.Println("\nPress Enter to exit...")
+		fmt.Scanln()
+		return
+	}
+
+	fmt.Printf("Found %d .ttbin file(s) to analyze:\n", len(files))
+	for i, file := range files {
+		fmt.Printf("  %d. %s\n", i+1, file)
+	}
+	fmt.Println()
+
+	// Scan all files to find available channels
+	fmt.Println("Scanning files to discover available channels...")
+	availableChannels, err := scanAvailableChannels(files)
+	if err != nil {
+		fmt.Printf("ERROR: Failed to scan files for channels: %v\n", err)
+		fmt.Println("\nPress Enter to exit...")
+		fmt.Scanln()
+		return
+	}
+
+	if len(availableChannels) == 0 {
+		fmt.Println("ERROR: No valid channels found in any file.")
+		fmt.Println("The files may be corrupted or not in SITT format.")
+		fmt.Println("\nPress Enter to exit...")
+		fmt.Scanln()
+		return
+	}
+
+	// Display available channels
+	fmt.Printf("\nAvailable channels found in files:\n")
+	var sortedChannels []uint16
+	for ch := range availableChannels {
+		sortedChannels = append(sortedChannels, ch)
+	}
+	sort.Slice(sortedChannels, func(i, j int) bool { return sortedChannels[i] < sortedChannels[j] })
+	
+	for _, ch := range sortedChannels {
+		count := availableChannels[ch]
+		fmt.Printf("  Channel %d: %d events\n", ch, count)
+	}
+	fmt.Println()
+
+	// Get channel numbers from user input with validation against available channels
 	var channel1, channel2 uint16
 	
 	for {
-		fmt.Print("Enter first channel number (1-999): ")
+		fmt.Print("Enter first channel number: ")
 		_, err := fmt.Scanln(&channel1)
-		if err != nil || channel1 == 0 || channel1 >= 1000 {
-			fmt.Println("Please enter a valid channel number between 1 and 999.")
-			// Clear input buffer
-			var dummy string
-			fmt.Scanln(&dummy)
+		if err != nil {
+			fmt.Println("Please enter a valid number.")
+			clearInputBuffer()
+			continue
+		}
+		if _, exists := availableChannels[channel1]; !exists {
+			fmt.Printf("Channel %d not found. Please choose from available channels above.\n", channel1)
 			continue
 		}
 		break
 	}
 
 	for {
-		fmt.Print("Enter second channel number (1-999): ")
+		fmt.Print("Enter second channel number: ")
 		_, err := fmt.Scanln(&channel2)
-		if err != nil || channel2 == 0 || channel2 >= 1000 {
-			fmt.Println("Please enter a valid channel number between 1 and 999.")
-			// Clear input buffer
-			var dummy string
-			fmt.Scanln(&dummy)
+		if err != nil {
+			fmt.Println("Please enter a valid number.")
+			clearInputBuffer()
+			continue
+		}
+		if _, exists := availableChannels[channel2]; !exists {
+			fmt.Printf("Channel %d not found. Please choose from available channels above.\n", channel2)
 			continue
 		}
 		if channel2 == channel1 {
@@ -87,17 +148,8 @@ func main() {
 		break
 	}
 
-	fmt.Printf("\nAnalyzing channels %d and %d...\n\n", channel1, channel2)
-
-	// Get all .ttbin files from data directory
-	files, err := getTimeTaFiles("data")
-	if err != nil {
-		fmt.Printf("ERROR: Failed to read files from data directory: %v\n", err)
-		fmt.Println("Please check that the data directory exists and is accessible.")
-		fmt.Println("\nPress Enter to exit...")
-		fmt.Scanln()
-		return
-	}
+	fmt.Printf("\nAnalyzing channels %d (%d events) and %d (%d events)...\n\n", 
+		channel1, availableChannels[channel1], channel2, availableChannels[channel2])
 
 	if len(files) == 0 {
 		fmt.Println("ERROR: No .ttbin files found in data/ directory.")
@@ -579,4 +631,79 @@ func saveTimeDiffs(timeDiffs []TimeDiff, filename string) error {
 	}
 
 	return nil
+}
+
+// scanAvailableChannels scans all files to discover which channels contain events
+func scanAvailableChannels(files []string) (map[uint16]int, error) {
+	channelCounts := make(map[uint16]int)
+	
+	for _, filepath := range files {
+		fmt.Printf("  Scanning %s...\n", filepath)
+		
+		file, err := os.Open(filepath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open file %s: %v", filepath, err)
+		}
+
+		// Find TIME_TAG blocks
+		timeTagBlocks, err := findSITTBlocks(file, 0x53495454) // 'SITT'
+		file.Close()
+		if err != nil {
+			return nil, fmt.Errorf("failed to find SITT blocks in %s: %v", filepath, err)
+		}
+
+		if len(timeTagBlocks) == 0 {
+			continue // No TIME_TAG blocks in this file
+		}
+
+		// Count channels in each block (sample first 1000 events per block to avoid scanning huge files)
+		file, err = os.Open(filepath)
+		if err != nil {
+			continue
+		}
+
+		for _, block := range timeTagBlocks {
+			// Skip the 16-byte header and go to data
+			dataStart := block.Position + 16
+			_, err := file.Seek(int64(dataStart), io.SeekStart)
+			if err != nil {
+				continue
+			}
+
+			reader := bufio.NewReader(file)
+			eventCount := 0
+			maxSampleEvents := 1000
+			dataSize := block.Length - 16 // Subtract header size
+
+			for eventCount < maxSampleEvents && uint32(eventCount*10) < dataSize {
+				var timetag uint64
+				var channel uint16
+
+				// Read timetag (8 bytes, little endian)
+				err := binary.Read(reader, binary.LittleEndian, &timetag)
+				if err != nil {
+					break // End of data or error
+				}
+
+				// Read channel (2 bytes, little endian)
+				err = binary.Read(reader, binary.LittleEndian, &channel)
+				if err != nil {
+					break
+				}
+
+				channelCounts[channel]++
+				eventCount++
+			}
+		}
+
+		file.Close()
+	}
+
+	return channelCounts, nil
+}
+
+// clearInputBuffer clears the input buffer to handle invalid input
+func clearInputBuffer() {
+	var dummy string
+	fmt.Scanln(&dummy)
 }
