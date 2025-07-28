@@ -107,7 +107,33 @@ chmod +x computeCorrelation
 
 ### Building for Different Platforms
 
-If you need to create executables for different operating systems:
+We provide automated build scripts to create executables for all supported operating systems:
+
+#### Unix/Linux/macOS (Recommended)
+
+```bash
+./build.sh
+```
+
+#### Windows
+
+```cmd
+build.bat
+```
+
+These scripts will create optimized binaries for:
+
+- **Windows**: `computeCorrelation.exe`
+- **macOS Intel**: `computeCorrelation-darwin-amd64`
+- **macOS Apple Silicon**: `computeCorrelation-darwin-arm64`
+- **Linux**: `computeCorrelation-linux-amd64`
+- **Current platform**: `computeCorrelation`
+
+The build scripts use `-ldflags="-s -w"` to create smaller binaries by stripping debug information.
+
+#### Manual Cross-Compilation
+
+If you need to create executables for different operating systems manually:
 
 ```bash
 # For Windows (from any OS)
