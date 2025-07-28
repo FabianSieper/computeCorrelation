@@ -7,10 +7,11 @@ echo Timetag Correlation Analyzer
 echo ============================
 echo.
 
-REM Check if computeCorrelation.exe exists
-if not exist "computeCorrelation.exe" (
-    echo ERROR: computeCorrelation.exe not found!
-    echo Make sure you are in the correct directory.
+REM Check if computeCorrelation.exe exists in bin directory
+if not exist "bin\computeCorrelation.exe" (
+    echo ERROR: bin\computeCorrelation.exe not found!
+    echo Make sure you are in the correct directory and that binaries are built.
+    echo Run build.bat to create the binaries if needed.
     echo.
     pause
     exit /b 1
@@ -39,7 +40,7 @@ echo Starting Timetag Correlation Analyzer...
 echo.
 
 REM Run the program
-computeCorrelation.exe
+bin\computeCorrelation.exe
 
 REM Keep window open if there was an error
 if errorlevel 1 (

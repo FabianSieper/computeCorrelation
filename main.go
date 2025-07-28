@@ -13,17 +13,17 @@ import (
 
 // Constants to avoid duplication
 const (
-	PressEnterToExit    = "\nPress Enter to exit..."
-	FailedToOpenFile    = "failed to open file: %v"
-	DataDirectory       = "data"
-	TTBinExtension      = "*.ttbin"
-	MaxConcurrency      = 4
-	DefaultBufferSize   = 64 * 1024
-	LargeBufferSize     = 1024 * 1024
-	BatchSize           = 5000
-	MaxSampleEvents     = 1000
-	RecordSize          = 10
-	SITTHeaderSize      = 16
+	PressEnterToExit  = "\nPress Enter to exit..."
+	FailedToOpenFile  = "failed to open file: %v"
+	DataDirectory     = "data"
+	TTBinExtension    = "*.ttbin"
+	MaxConcurrency    = 4
+	DefaultBufferSize = 64 * 1024
+	LargeBufferSize   = 1024 * 1024
+	BatchSize         = 5000
+	MaxSampleEvents   = 1000
+	RecordSize        = 10
+	SITTHeaderSize    = 16
 )
 
 // TimeTag represents a single time tag entry
@@ -50,7 +50,7 @@ type SITTBlockInfo struct {
 
 func main() {
 	printHeader()
-	
+
 	if err := validateDataDirectory(); err != nil {
 		handleError(err)
 		return
@@ -730,14 +730,14 @@ func scanSingleFile(filepath string) (map[uint16]int, error) {
 func findTimeTagBlocks(file *os.File) ([]SITTBlockInfo, error) {
 	blockTypes := []uint32{0x01, 0x02, 0x03}
 	var timeTagBlocks []SITTBlockInfo
-	
+
 	for _, blockType := range blockTypes {
 		blocks, err := findSITTBlocks(file, blockType)
 		if err == nil {
 			timeTagBlocks = append(timeTagBlocks, blocks...)
 		}
 	}
-	
+
 	return timeTagBlocks, nil
 }
 
@@ -791,7 +791,7 @@ func scanBlocksWorker(filepath string, blockChan <-chan SITTBlockInfo) map[uint1
 		for channel, count := range counts {
 			blockLocalCounts[channel] += count
 		}
-		
+
 		workerFile.Close()
 	}
 
@@ -800,7 +800,7 @@ func scanBlocksWorker(filepath string, blockChan <-chan SITTBlockInfo) map[uint1
 
 func scanSingleBlock(workerFile *os.File, block SITTBlockInfo) map[uint16]int {
 	blockCounts := make(map[uint16]int)
-	
+
 	dataStart := block.Position + SITTHeaderSize
 	_, err := workerFile.Seek(int64(dataStart), io.SeekStart)
 	if err != nil {
@@ -830,7 +830,7 @@ func scanSingleBlock(workerFile *os.File, block SITTBlockInfo) map[uint16]int {
 		blockCounts[channel]++
 		eventCount++
 	}
-	
+
 	return blockCounts
 }
 

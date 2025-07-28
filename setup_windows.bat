@@ -4,10 +4,11 @@ echo Timetag Correlation Analyzer - Setup
 echo ============================================
 echo.
 
-REM Check if computeCorrelation.exe exists
-if not exist "computeCorrelation.exe" (
-    echo ERROR: computeCorrelation.exe not found!
-    echo Please make sure the executable file is in this directory.
+REM Check if computeCorrelation.exe exists in bin directory
+if not exist "bin\computeCorrelation.exe" (
+    echo ERROR: bin\computeCorrelation.exe not found!
+    echo Please make sure the executable file is in the bin directory.
+    echo Run build.bat to create the binaries if needed.
     echo.
     pause
     exit /b 1
@@ -38,7 +39,8 @@ if %found_ttbin%==0 (
     echo.
     echo Example file structure:
     echo   your-project\
-    echo   ├── computeCorrelation.exe
+    echo   ├── bin\
+    echo   │   └── computeCorrelation.exe
     echo   ├── start_windows.bat
     echo   └── data\
     echo       ├── file1.ttbin
@@ -55,7 +57,7 @@ if %found_ttbin%==0 (
 
 echo Setup complete! You can now run the program by:
 echo 1. Double-clicking 'start_windows.bat'
-echo 2. Or double-clicking 'computeCorrelation.exe' directly
+echo 2. Or running 'bin\computeCorrelation.exe' directly
 echo.
 echo The program will ask you for two channel numbers to analyze.
 echo Results will be saved as 'time_diff_chX_chY.txt' files.

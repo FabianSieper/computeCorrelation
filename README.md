@@ -65,12 +65,12 @@ If you're setting up the program for the first time:
 
 #### Option B: Using pre-compiled executable (experienced users)
 
-1. Download or copy the `computeCorrelation.exe` file
+1. Download or copy the `bin/computeCorrelation.exe` file
 2. Create a folder for your data and place your .ttbin files in a subfolder called `data/`
 3. Double-click `start_windows.bat` or run:
 
    ```cmd
-   computeCorrelation.exe
+   bin\computeCorrelation.exe
    ```
 
 #### Option C: Using batch script
@@ -86,8 +86,17 @@ If you're setting up the program for the first time:
 #### Option A: Using pre-compiled binary (if available)
 
 ```bash
-chmod +x computeCorrelation
-./computeCorrelation
+# For Intel Macs
+chmod +x bin/computeCorrelation-darwin-amd64
+./bin/computeCorrelation-darwin-amd64
+
+# For Apple Silicon Macs  
+chmod +x bin/computeCorrelation-darwin-arm64
+./bin/computeCorrelation-darwin-arm64
+
+# Or use the native binary (if built for current platform)
+chmod +x bin/computeCorrelation
+./bin/computeCorrelation
 ```
 
 #### Option B: Compile from source
@@ -96,13 +105,13 @@ chmod +x computeCorrelation
 2. Compile:
 
    ```bash
-   go build -o computeCorrelation main.go
+   go build -o bin/computeCorrelation main.go
    ```
 
 3. Run:
 
    ```bash
-   ./computeCorrelation
+   ./bin/computeCorrelation
    ```
 
 ### Building for Different Platforms
@@ -121,13 +130,12 @@ We provide automated build scripts to create executables for all supported opera
 build.bat
 ```
 
-These scripts will create optimized binaries for:
+These scripts will create optimized binaries in the `bin/` directory:
 
-- **Windows**: `computeCorrelation.exe`
-- **macOS Intel**: `computeCorrelation-darwin-amd64`
-- **macOS Apple Silicon**: `computeCorrelation-darwin-arm64`
-- **Linux**: `computeCorrelation-linux-amd64`
-- **Current platform**: `computeCorrelation`
+- **Windows**: `bin/computeCorrelation.exe`
+- **macOS Intel**: `bin/computeCorrelation-darwin-amd64`
+- **macOS Apple Silicon**: `bin/computeCorrelation-darwin-arm64`
+- **Linux**: `bin/computeCorrelation-linux-amd64`
 
 The build scripts use `-ldflags="-s -w"` to create smaller binaries by stripping debug information.
 
@@ -137,13 +145,13 @@ If you need to create executables for different operating systems manually:
 
 ```bash
 # For Windows (from any OS)
-GOOS=windows GOARCH=amd64 go build -o computeCorrelation.exe main.go
+GOOS=windows GOARCH=amd64 go build -o bin/computeCorrelation.exe main.go
 
 # For macOS (from any OS)
-GOOS=darwin GOARCH=amd64 go build -o computeCorrelation main.go
+GOOS=darwin GOARCH=amd64 go build -o bin/computeCorrelation-darwin-amd64 main.go
 
 # For Linux (from any OS)
-GOOS=linux GOARCH=amd64 go build -o computeCorrelation main.go
+GOOS=linux GOARCH=amd64 go build -o bin/computeCorrelation-linux-amd64 main.go
 ```
 
 ## Usage Instructions
@@ -163,8 +171,14 @@ Your project directory should look like this:
 
 ```text
 your-project/
-├── computeCorrelation.exe      (Windows executable)
-├── computeCorrelation          (macOS/Linux executable)
+├── bin/                        (compiled binaries)
+│   ├── computeCorrelation.exe      (Windows executable)
+│   ├── computeCorrelation-darwin-amd64  (macOS Intel executable)
+│   ├── computeCorrelation-darwin-arm64  (macOS Apple Silicon executable)
+│   ├── computeCorrelation-linux-amd64   (Linux executable)
+│   └── computeCorrelation              (native executable)
+├── build.sh                    (Unix build script)
+├── build.bat                   (Windows build script)
 ├── setup_windows.bat           (Windows setup script - first-time users)
 ├── start_windows.bat           (Windows launcher script)
 ├── main.go                     (source code)
