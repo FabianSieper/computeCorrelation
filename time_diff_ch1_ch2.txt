@@ -1,0 +1,4 @@
+# Zeitdifferenzen zwischen Kanälen
+# Format: Timestamp1, Timestamp2, Channel1, Channel2, TimeDiff(ns)
+# TimeDiff = Timestamp2 - Timestamp1
+

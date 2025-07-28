@@ -1,0 +1,5 @@
+# Zeitdifferenzen zwischen aufeinanderfolgenden Events
+# Format: Timestamp1, Timestamp2, Channel1, Channel2, TimeDiff(ns)
+# TimeDiff = Timestamp2 - Timestamp1
+
+4294967034,4294967034,262,262,0
