@@ -1,0 +1,42 @@
+# Binaries
+*.exe
+computeCorrelation
+
+# Data files
+data/
+*.ttbin
+
+# Output files
+time_diff_*.txt
+
+# Go build artifacts
+*.mod
+go.sum
+
+# Temporary files
+*.tmp
+*.temp
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Old/backup files
+main_old.go
+main_v2.go
+main_final.go
+
+# Log files
+*.log
