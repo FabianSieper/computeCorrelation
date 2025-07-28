@@ -1,13 +1,13 @@
 # Timetag Correlation Analyzer
 
-This high-performance Go program calculates time differences between two channels from timetag files (.ttbin format). **Optimized for very large files** with efficient memory usage and parallel processing.
+This high-performance Go program calculates time differences between two channels from timetag files (.ttbin format). **Optimized for very large files** with efficient memory usage, parallel processing, and comprehensive error handling.
 
 ## Features
 
 The program:
 
 1. Reads all .ttbin files from the `data/` directory (sorted lexicographically)
-2. Extracts timetag data for two user-specified channels
+2. Extracts timetag data for two user-specified channels  
 3. Calculates time differences between consecutive events of the specified channels
 4. Saves results to a CSV file
 
@@ -15,12 +15,13 @@ Key features:
 
 - **High Performance**: Optimized for very large .ttbin files (GB+ sizes)
 - **Memory Efficient**: Streaming file processing without loading entire files into memory
-- **Parallel Processing**: Concurrent file processing for faster execution
+- **Parallel Processing**: Concurrent file processing for faster execution (limited to 4 files simultaneously)
 - **Large Buffer I/O**: 1MB read buffers and 64KB write buffers for optimal disk performance
 - **Pre-allocated Memory**: Smart memory allocation to reduce garbage collection
+- **Robust Error Handling**: Clear error messages and guidance for troubleshooting
+- **Input Validation**: Validates channel numbers and file availability before processing
+- **User-Friendly Interface**: Progress feedback and detailed status information
 - **Multiple files**: Automatically processes all .ttbin files in chronological order
-- **Correlation analysis**: Calculates time differences between all consecutive events of selected channels
-- **Channel overview**: Shows a summary of all found channels and event counts
 - **Cross-platform**: Works on Windows, macOS, and Linux
 
 ## Performance Optimizations
@@ -29,9 +30,10 @@ Key features:
 
 - **Streaming Parser**: Processes files in chunks without loading entire file into memory
 - **Buffered I/O**: Uses 1MB read buffers and 64KB write buffers
-- **Parallel File Processing**: Multiple files are processed concurrently
+- **Parallel File Processing**: Multiple files are processed concurrently (max 4 simultaneous)
 - **Memory Pre-allocation**: Reduces memory allocations during processing
 - **Optimized Data Structures**: Efficient slice operations and minimal copying
+- **Reduced Complexity**: Refactored functions to be more maintainable and efficient
 
 ### Memory Usage
 
@@ -184,16 +186,83 @@ The program expects .ttbin files in SITT (SwissInstruments Time Tag) format in t
 ## Example Output
 
 ```text
-Enter first channel number: 262
-Enter second channel number: 261
+=== Timetag Correlation Analyzer ===
+This program calculates time differences between consecutive events from two channels.
+
+Enter first channel number (1-999): 262
+Enter second channel number (1-999): 261
+
+Analyzing channels 262 and 261...
+
+Found 2 .ttbin file(s) to process:
+  1. data/TimeTags-test_2025-07-08_161026-1.ttbin
+  2. data/TimeTags-test_2025-07-08_161026.ttbin
+
 Processing file: data/TimeTags-test_2025-07-08_161026-1.ttbin
   Found: 1 blocks of type 0x3
+  Extracted 2 time tags from data/TimeTags-test_2025-07-08_161026-1.ttbin
 Processing file: data/TimeTags-test_2025-07-08_161026.ttbin
   Found: 1 blocks of type 0x3
+  Extracted 2 time tags from data/TimeTags-test_2025-07-08_161026.ttbin
 Total time tags read: 4
-Found channels:
-  Channel 262: 2 Events
-  Channel 261: 2 Events
-Relevant events (sorted): 4
-Successfully calculated 3 time differences and saved to 'time_diff_ch262_ch261.txt'.
+Found channels and event counts:
+  Channel 261: 2 Events ← Target channel
+  Channel 262: 2 Events ← Target channel
+
+Relevant events for analysis: 4
+Sample events (chronologically sorted):
+  Event 1: Channel 262, Timestamp 12345
+  Event 2: Channel 261, Timestamp 12350
+  Event 3: Channel 262, Timestamp 12355
+  Event 4: Channel 261, Timestamp 12360
+
+✓ SUCCESS: Calculated 3 time differences and saved to 'time_diff_ch262_ch261.txt'
+
+Press Enter to exit...
+```
+
+## Error Handling
+
+The program provides clear, user-friendly error messages for common issues:
+
+### Missing Data Directory
+
+```text
+ERROR: 'data' directory not found!
+Please create a 'data' directory and place your .ttbin files in it.
+```
+
+### No .ttbin Files
+
+```text
+ERROR: No .ttbin files found in data/ directory.
+Please place your .ttbin files in the data folder.
+Supported file extension: .ttbin
+```
+
+### Invalid Channel Numbers
+
+```text
+Please enter a valid channel number between 1 and 999.
+Second channel must be different from the first channel.
+```
+
+### No Events Found
+
+```text
+WARNING: No time differences calculated!
+This could mean:
+- No events found for channels 262 or 261
+- Only one channel has events (need both for differences)
+- File format not recognized or corrupted
+```
+
+### File Processing Errors
+
+```text
+ERROR: Failed to process files: no SITT blocks found - file may not be in SITT format
+This could be due to:
+- Corrupted or invalid .ttbin files
+- Insufficient memory for very large files
+- File permission issues
 ```
