@@ -104,7 +104,7 @@ func main() {
 		sortedChannels = append(sortedChannels, ch)
 	}
 	sort.Slice(sortedChannels, func(i, j int) bool { return sortedChannels[i] < sortedChannels[j] })
-	
+
 	for _, ch := range sortedChannels {
 		count := availableChannels[ch]
 		fmt.Printf("  Channel %d: %d events\n", ch, count)
@@ -113,7 +113,7 @@ func main() {
 
 	// Get channel numbers from user input with validation against available channels
 	var channel1, channel2 uint16
-	
+
 	for {
 		fmt.Print("Enter first channel number: ")
 		_, err := fmt.Scanln(&channel1)
@@ -148,7 +148,7 @@ func main() {
 		break
 	}
 
-	fmt.Printf("\nAnalyzing channels %d (%d events) and %d (%d events)...\n\n", 
+	fmt.Printf("\nAnalyzing channels %d (%d events) and %d (%d events)...\n\n",
 		channel1, availableChannels[channel1], channel2, availableChannels[channel2])
 
 	if len(files) == 0 {
@@ -223,68 +223,70 @@ func getTimeTaFiles(dataDir string) ([]string, error) {
 	return files, nil
 }
 
-// processFiles processes all files and calculates time differences with improved error handling
+// processFiles processes all files and calculates time differences with improved performance using workers
 func processFiles(files []string, channel1, channel2 uint16) ([]TimeDiff, error) {
-	var allTimeTags []TimeTag
-	var mu sync.Mutex
+	// Use buffered channel to collect filtered time tags directly
+	const bufferSize = 10000
+	allTimeTagsChan := make(chan TimeTag, bufferSize)
 	var wg sync.WaitGroup
+	var processingErrors []error
+	var errorMu sync.Mutex
 
-	// Channels for collecting results from goroutines
-	results := make(chan []TimeTag, len(files))
-	errors := make(chan error, len(files))
-
-	// Process files in parallel (but limit concurrency for very large files)
+	// Process files in parallel with optimized worker pool
 	maxConcurrency := 4
 	if len(files) < maxConcurrency {
 		maxConcurrency = len(files)
 	}
-	
+
 	semaphore := make(chan struct{}, maxConcurrency)
 
 	for _, file := range files {
 		wg.Add(1)
 		go func(filename string) {
 			defer wg.Done()
-			
-			// Limit concurrency
+			defer func() { <-semaphore }() // Release semaphore
+
+			// Acquire semaphore
 			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
-			
+
 			fmt.Printf("Processing file: %s\n", filename)
-			
-			timeTags, err := readTimeTagFile(filename)
+
+			// Process file and stream filtered results directly to channel
+			count, err := processFileOptimized(filename, channel1, channel2, allTimeTagsChan)
 			if err != nil {
-				errors <- fmt.Errorf("error reading %s: %v", filename, err)
+				errorMu.Lock()
+				processingErrors = append(processingErrors, fmt.Errorf("error reading %s: %v", filename, err))
+				errorMu.Unlock()
 				return
 			}
-			
-			if len(timeTags) == 0 {
-				fmt.Printf("  Warning: No time tags found in %s\n", filename)
+
+			if count == 0 {
+				fmt.Printf("  Warning: No relevant time tags found in %s\n", filename)
 			} else {
-				fmt.Printf("  Extracted %d time tags from %s\n", len(timeTags), filename)
+				fmt.Printf("  Extracted %d relevant time tags from %s\n", count, filename)
 			}
-			
-			results <- timeTags
 		}(file)
 	}
 
-	// Wait for all goroutines to complete
-	wg.Wait()
-	close(results)
-	close(errors)
+	// Close channel when all workers are done
+	go func() {
+		wg.Wait()
+		close(allTimeTagsChan)
+	}()
 
-	// Check for errors
-	select {
-	case err := <-errors:
-		return nil, err
-	default:
+	// Collect results from channel into slice
+	var allTimeTags []TimeTag
+	for tag := range allTimeTagsChan {
+		allTimeTags = append(allTimeTags, tag)
 	}
 
-	// Collect all results
-	for timeTags := range results {
-		mu.Lock()
-		allTimeTags = append(allTimeTags, timeTags...)
-		mu.Unlock()
+	// Check for errors
+	if len(processingErrors) > 0 {
+		if len(allTimeTags) == 0 {
+			return nil, processingErrors[0] // Return first error if no data
+		}
+		// Log warnings but continue if we have some data
+		fmt.Printf("Warning: %d files had errors but continuing with available data\n", len(processingErrors))
 	}
 
 	if len(allTimeTags) == 0 {
@@ -310,7 +312,7 @@ func processFiles(files []string, channel1, channel2 uint16) ([]TimeDiff, error)
 		sortedChannels = append(sortedChannels, ch)
 	}
 	sort.Slice(sortedChannels, func(i, j int) bool { return sortedChannels[i] < sortedChannels[j] })
-	
+
 	for _, ch := range sortedChannels {
 		count := channelCounts[ch]
 		if ch == channel1 || ch == channel2 {
@@ -333,6 +335,144 @@ func processFiles(files []string, channel1, channel2 uint16) ([]TimeDiff, error)
 	return calculateTimeDiffs(allTimeTags, channel1, channel2), nil
 }
 
+// processFileOptimized processes a single file with streaming and filtering for better performance
+func processFileOptimized(filename string, channel1, channel2 uint16, resultChan chan<- TimeTag) (int, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return 0, fmt.Errorf("failed to open file: %v", err)
+	}
+	defer file.Close()
+
+	// Check file size
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get file info: %v", err)
+	}
+
+	if fileInfo.Size() == 0 {
+		return 0, fmt.Errorf("file is empty")
+	}
+
+	if fileInfo.Size() < 32 {
+		return 0, fmt.Errorf("file too small to contain valid SITT data (size: %d bytes)", fileInfo.Size())
+	}
+
+	// Find all SITT blocks that might contain time tag data
+	blockTypes := []uint32{0x01, 0x02, 0x03}
+	var allBlocks []SITTBlockInfo
+	foundAnyBlock := false
+
+	for _, blockType := range blockTypes {
+		blocks, err := findSITTBlocks(file, blockType)
+		if err != nil {
+			return 0, fmt.Errorf("failed to find SITT blocks: %v", err)
+		}
+
+		if len(blocks) > 0 {
+			foundAnyBlock = true
+			fmt.Printf("  Found: %d blocks of type 0x%x\n", len(blocks), blockType)
+			allBlocks = append(allBlocks, blocks...)
+		}
+	}
+
+	if !foundAnyBlock {
+		return 0, fmt.Errorf("no SITT blocks found - file may not be in SITT format")
+	}
+
+	// Process blocks in parallel using worker pool
+	const maxBlockWorkers = 8
+	blockChan := make(chan SITTBlockInfo, len(allBlocks))
+	var blockWg sync.WaitGroup
+	var totalCount int64
+	var countMu sync.Mutex
+
+	// Start block processing workers
+	numWorkers := maxBlockWorkers
+	if len(allBlocks) < numWorkers {
+		numWorkers = len(allBlocks)
+	}
+
+	for i := 0; i < numWorkers; i++ {
+		blockWg.Add(1)
+		go func() {
+			defer blockWg.Done()
+			localCount := 0
+
+			for block := range blockChan {
+				count, err := processBlockOptimized(file, block, channel1, channel2, resultChan)
+				if err != nil {
+					// Log error but continue processing other blocks
+					fmt.Printf("    Warning: Error processing block at %d: %v\n", block.Position, err)
+					continue
+				}
+				localCount += count
+			}
+
+			countMu.Lock()
+			totalCount += int64(localCount)
+			countMu.Unlock()
+		}()
+	}
+
+	// Send blocks to workers
+	for _, block := range allBlocks {
+		blockChan <- block
+	}
+	close(blockChan)
+
+	// Wait for all block workers to complete
+	blockWg.Wait()
+
+	return int(totalCount), nil
+}
+
+// processBlockOptimized processes a single SITT block with filtering
+func processBlockOptimized(file *os.File, block SITTBlockInfo, channel1, channel2 uint16, resultChan chan<- TimeTag) (int, error) {
+	// Create a separate file handle for this worker to avoid race conditions
+	workerFile, err := os.Open(file.Name())
+	if err != nil {
+		return 0, err
+	}
+	defer workerFile.Close()
+
+	if _, err := workerFile.Seek(int64(block.Position+16), io.SeekStart); err != nil {
+		return 0, err
+	}
+
+	dataSize := calculateDataSize(block.Length)
+	if dataSize == 0 {
+		return 0, nil
+	}
+
+	data, err := readDataBlock(workerFile, dataSize)
+	if err != nil {
+		return 0, err
+	}
+
+	// Parse and filter in one pass
+	count := 0
+	for i := 0; i < len(data); i += 16 {
+		if i+16 <= len(data) {
+			if tag := tryParseTimeTag(data[i : i+16]); tag != nil {
+				// Filter for target channels only
+				if tag.Channel == channel1 || tag.Channel == channel2 {
+					select {
+					case resultChan <- *tag:
+						count++
+					default:
+						// Channel is full, this shouldn't happen with proper buffering
+						// but we handle it gracefully
+						resultChan <- *tag
+						count++
+					}
+				}
+			}
+		}
+	}
+
+	return count, nil
+}
+
 // readTimeTagFile reads time tags from a .ttbin file with improved error handling
 func readTimeTagFile(filename string) ([]TimeTag, error) {
 	file, err := os.Open(filename)
@@ -346,11 +486,11 @@ func readTimeTagFile(filename string) ([]TimeTag, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get file info: %v", err)
 	}
-	
+
 	if fileInfo.Size() == 0 {
 		return nil, fmt.Errorf("file is empty")
 	}
-	
+
 	if fileInfo.Size() < 32 {
 		return nil, fmt.Errorf("file too small to contain valid SITT data (size: %d bytes)", fileInfo.Size())
 	}
@@ -360,7 +500,7 @@ func readTimeTagFile(filename string) ([]TimeTag, error) {
 	// Find all SITT blocks that might contain time tag data
 	blockTypes := []uint32{0x01, 0x02, 0x03}
 	foundAnyBlock := false
-	
+
 	for _, blockType := range blockTypes {
 		blocks, err := findSITTBlocks(file, blockType)
 		if err != nil {
@@ -435,7 +575,7 @@ func findSITTBlocks(file *os.File, blockType uint32) ([]SITTBlockInfo, error) {
 // Helper function to search for SITT patterns in buffer
 func searchSITTInBuffer(buffer []byte, totalBytes int, blockType uint32, position int64, overlap int) []SITTBlockInfo {
 	var blocks []SITTBlockInfo
-	
+
 	for i := 0; i < totalBytes-16; i += 4 {
 		if isSITTMagic(buffer, i) && i+16 <= totalBytes {
 			length := binary.LittleEndian.Uint32(buffer[i+4 : i+8])
@@ -450,16 +590,16 @@ func searchSITTInBuffer(buffer []byte, totalBytes int, blockType uint32, positio
 			}
 		}
 	}
-	
+
 	return blocks
 }
 
 // Helper function to check SITT magic bytes
 func isSITTMagic(buffer []byte, index int) bool {
-	return buffer[index] == 'S' && 
-		   buffer[index+1] == 'I' && 
-		   buffer[index+2] == 'T' && 
-		   buffer[index+3] == 'T'
+	return buffer[index] == 'S' &&
+		buffer[index+1] == 'I' &&
+		buffer[index+2] == 'T' &&
+		buffer[index+3] == 'T'
 }
 
 // Refactored readTimeTagDataAtPosition with reduced complexity
@@ -504,7 +644,7 @@ func parseTimeTagData(data []byte) []TimeTag {
 
 	for i := 0; i < len(data); i += 16 {
 		if i+16 <= len(data) {
-			if tag := tryParseTimeTag(data[i:i+16]); tag != nil {
+			if tag := tryParseTimeTag(data[i : i+16]); tag != nil {
 				timeTags = append(timeTags, *tag)
 			}
 		}
@@ -633,77 +773,147 @@ func saveTimeDiffs(timeDiffs []TimeDiff, filename string) error {
 	return nil
 }
 
-// scanAvailableChannels scans all files to discover which channels contain events
+// scanAvailableChannels scans all files to discover which channels contain events using optimized parallel processing
 func scanAvailableChannels(files []string) (map[uint16]int, error) {
 	channelCounts := make(map[uint16]int)
-	
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	// Process files in parallel for scanning
+	maxConcurrency := 4
+	if len(files) < maxConcurrency {
+		maxConcurrency = len(files)
+	}
+	semaphore := make(chan struct{}, maxConcurrency)
+
 	for _, filepath := range files {
-		fmt.Printf("  Scanning %s...\n", filepath)
-		
-		file, err := os.Open(filepath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to open file %s: %v", filepath, err)
-		}
+		wg.Add(1)
+		go func(filename string) {
+			defer wg.Done()
+			defer func() { <-semaphore }()
 
-		// Find TIME_TAG blocks (try different block types like in readTimeTagFile)
-		blockTypes := []uint32{0x01, 0x02, 0x03}
-		var timeTagBlocks []SITTBlockInfo
-		for _, blockType := range blockTypes {
-			blocks, err := findSITTBlocks(file, blockType)
-			if err == nil {
-				timeTagBlocks = append(timeTagBlocks, blocks...)
-			}
-		}
-		file.Close()
-		
-		if len(timeTagBlocks) == 0 {
-			continue // No TIME_TAG blocks in this file
-		}
+			semaphore <- struct{}{} // Acquire semaphore
 
-		// Count channels in each block (sample first 1000 events per block to avoid scanning huge files)
-		file, err = os.Open(filepath)
-		if err != nil {
-			continue
-		}
+			fmt.Printf("  Scanning %s...\n", filename)
 
-		for _, block := range timeTagBlocks {
-			// Skip the 16-byte header and go to data
-			dataStart := block.Position + 16
-			_, err := file.Seek(int64(dataStart), io.SeekStart)
+			localCounts, err := scanSingleFile(filename)
 			if err != nil {
-				continue
+				fmt.Printf("    Warning: Failed to scan %s: %v\n", filename, err)
+				return
 			}
 
-			reader := bufio.NewReader(file)
-			eventCount := 0
-			maxSampleEvents := 1000
-			dataSize := block.Length - 16 // Subtract header size
-
-			for eventCount < maxSampleEvents && uint32(eventCount*10) < dataSize {
-				var timetag uint64
-				var channel uint16
-
-				// Read timetag (8 bytes, little endian)
-				err := binary.Read(reader, binary.LittleEndian, &timetag)
-				if err != nil {
-					break // End of data or error
-				}
-
-				// Read channel (2 bytes, little endian)
-				err = binary.Read(reader, binary.LittleEndian, &channel)
-				if err != nil {
-					break
-				}
-
-				channelCounts[channel]++
-				eventCount++
+			// Merge results thread-safely
+			mu.Lock()
+			for channel, count := range localCounts {
+				channelCounts[channel] += count
 			}
-		}
-
-		file.Close()
+			mu.Unlock()
+		}(filepath)
 	}
 
+	wg.Wait()
 	return channelCounts, nil
+}
+
+// scanSingleFile scans a single file for channel information
+func scanSingleFile(filepath string) (map[uint16]int, error) {
+	localCounts := make(map[uint16]int)
+
+	file, err := os.Open(filepath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %v", err)
+	}
+	defer file.Close()
+
+	// Find TIME_TAG blocks (try different block types like in readTimeTagFile)
+	blockTypes := []uint32{0x01, 0x02, 0x03}
+	var timeTagBlocks []SITTBlockInfo
+	for _, blockType := range blockTypes {
+		blocks, err := findSITTBlocks(file, blockType)
+		if err == nil {
+			timeTagBlocks = append(timeTagBlocks, blocks...)
+		}
+	}
+
+	if len(timeTagBlocks) == 0 {
+		return localCounts, nil // No TIME_TAG blocks in this file
+	}
+
+	// Process blocks in parallel within the file
+	const maxSampleEvents = 1000
+	blockChan := make(chan SITTBlockInfo, len(timeTagBlocks))
+	var blockWg sync.WaitGroup
+	var blockMu sync.Mutex
+
+	// Limit concurrent block processing
+	maxBlockWorkers := 4
+	if len(timeTagBlocks) < maxBlockWorkers {
+		maxBlockWorkers = len(timeTagBlocks)
+	}
+
+	for i := 0; i < maxBlockWorkers; i++ {
+		blockWg.Add(1)
+		go func() {
+			defer blockWg.Done()
+			blockLocalCounts := make(map[uint16]int)
+
+			for block := range blockChan {
+				// Create separate file handle for this worker
+				workerFile, err := os.Open(filepath)
+				if err != nil {
+					continue
+				}
+
+				dataStart := block.Position + 16
+				_, err = workerFile.Seek(int64(dataStart), io.SeekStart)
+				if err != nil {
+					workerFile.Close()
+					continue
+				}
+
+				reader := bufio.NewReader(workerFile)
+				eventCount := 0
+				dataSize := block.Length - 16
+
+				for eventCount < maxSampleEvents && uint32(eventCount*10) < dataSize {
+					var timetag uint64
+					var channel uint16
+
+					// Read timetag (8 bytes, little endian)
+					err := binary.Read(reader, binary.LittleEndian, &timetag)
+					if err != nil {
+						break
+					}
+
+					// Read channel (2 bytes, little endian)
+					err = binary.Read(reader, binary.LittleEndian, &channel)
+					if err != nil {
+						break
+					}
+
+					blockLocalCounts[channel]++
+					eventCount++
+				}
+				workerFile.Close()
+			}
+
+			// Merge block results
+			blockMu.Lock()
+			for channel, count := range blockLocalCounts {
+				localCounts[channel] += count
+			}
+			blockMu.Unlock()
+		}()
+	}
+
+	// Send blocks to workers
+	for _, block := range timeTagBlocks {
+		blockChan <- block
+	}
+	close(blockChan)
+
+	blockWg.Wait()
+	return localCounts, nil
 }
 
 // clearInputBuffer clears the input buffer to handle invalid input
