@@ -23,7 +23,19 @@ Key features:
 
 ### Windows (Recommended - No Go installation required)
 
-#### Option A: Using pre-compiled executable (easiest)
+#### Option A: Using setup script (first-time users)
+
+If you're setting up the program for the first time:
+
+1. Run `setup_windows.bat` to automatically:
+   - Check if all required files are present
+   - Create the `data/` directory if needed
+   - Verify your .ttbin files are in place
+   - Guide you through the setup process
+
+2. After setup, use `start_windows.bat` to run the program
+
+#### Option B: Using pre-compiled executable (experienced users)
 
 1. Download or copy the `computeCorrelation.exe` file
 2. Create a folder for your data and place your .ttbin files in a subfolder called `data/`
@@ -33,7 +45,7 @@ Key features:
    computeCorrelation.exe
    ```
 
-#### Option B: Using batch script
+#### Option C: Using batch script
 
 1. Use the provided `start_windows.bat` script which includes error checking:
 
@@ -99,6 +111,7 @@ Your project directory should look like this:
 your-project/
 ├── computeCorrelation.exe      (Windows executable)
 ├── computeCorrelation          (macOS/Linux executable)
+├── setup_windows.bat           (Windows setup script - first-time users)
 ├── start_windows.bat           (Windows launcher script)
 ├── main.go                     (source code)
 └── data/                       (your .ttbin files)
@@ -106,6 +119,16 @@ your-project/
     ├── file2.ttbin
     └── ...
 ```
+
+### Windows Script Description
+
+- **`setup_windows.bat`**: Run this first if you're new to the program. It will:
+  - Check if all required files are present
+  - Create the `data/` directory automatically
+  - Verify your .ttbin files are in the right place
+  - Provide helpful guidance for first-time setup
+
+- **`start_windows.bat`**: Use this to run the program with error checking and user-friendly messages
 
 ## Output Format
 
