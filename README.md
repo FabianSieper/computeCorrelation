@@ -2,6 +2,63 @@
 
 This high-performance Go program calculates time differences between two channels from timetag files (.ttbin format). **Optimized for very large files** with efficient memory usage, parallel processing, and comprehensive error handling.
 
+## Project Structure
+
+The project is now organized into modules for better maintainability and reusability:
+
+```text
+computeCorrelation/
+├── main.go              # Main correlation analyzer application
+├── go.mod               # Go module definition
+├── ttbin/               # TTBin file processing module
+│   ├── ttbin.go         # Main package interface (Processor)
+│   ├── reader.go        # Core file reading and processing logic
+│   ├── utils.go         # Utility functions and helper types
+│   └── README.md        # TTBin module documentation
+├── examples/            # Example programs
+│   └── ttbin_usage.go   # Example showing how to use the ttbin module
+├── bin/                 # Compiled binaries
+├── build.sh             # Unix build script
+├── build.bat            # Windows build script
+├── setup_windows.bat    # Windows setup script
+├── start_windows.bat    # Windows launcher script
+└── data/                # Your .ttbin files
+```
+
+## TTBin Module
+
+The `ttbin` module is a standalone package that can be used by other applications to read and process SITT format timetag files. It provides:
+
+- **High-level API**: Simple `Processor` interface for common operations
+- **Streaming Processing**: Memory-efficient handling of large files
+- **Parallel Processing**: Concurrent file and block processing
+- **Channel Filtering**: Process only specific channels for better performance
+- **Comprehensive Error Handling**: Clear error messages and recovery
+
+### Basic TTBin Module Usage
+
+```go
+import "github.com/FabianSieper/computeCorrelation/ttbin"
+
+// Create a processor
+processor := ttbin.NewProcessor("data")
+
+// Get files and scan channels
+files, _ := processor.GetFiles()
+channels, _ := processor.ScanChannels(files)
+
+// Process files for specific channels
+timeTagChan := make(chan ttbin.TimeTag, 1000)
+go processor.ProcessFiles(files, []uint16{258, 259}, timeTagChan)
+
+// Handle time tags as they arrive
+for tag := range timeTagChan {
+    fmt.Printf("Channel %d: %d\n", tag.Channel, tag.Timestamp)
+}
+```
+
+For detailed documentation, see [`ttbin/README.md`](ttbin/README.md).
+
 ## Features
 
 The program:
