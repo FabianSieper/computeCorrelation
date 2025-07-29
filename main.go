@@ -48,26 +48,67 @@ func main() {
 		return
 	}
 
-	channel1, channel2, err := getUserChannelInput(processor, availableChannels)
+	// Get user's choice of operation
+	operation, err := getOperationChoice()
 	if err != nil {
 		handleError(err)
 		return
 	}
 
-	if err := processAndSaveResults(processor, files, channel1, channel2, availableChannels); err != nil {
-		handleError(err)
-		return
+	switch operation {
+	case 1: // Time difference analysis
+		channel1, channel2, err := getUserChannelInput(processor, availableChannels)
+		if err != nil {
+			handleError(err)
+			return
+		}
+
+		if err := processAndSaveResults(processor, files, channel1, channel2, availableChannels); err != nil {
+			handleError(err)
+			return
+		}
+
+		fmt.Printf("✓ SUCCESS: Results saved successfully")
+
+	case 2: // CSV export
+		if err := exportToCSV(processor, files, availableChannels); err != nil {
+			handleError(err)
+			return
+		}
+
+		fmt.Printf("✓ SUCCESS: CSV export completed successfully")
 	}
 
-	fmt.Printf("✓ SUCCESS: Results saved successfully")
 	fmt.Print(PressEnterToExit)
 	fmt.Scanln()
 }
 
 func printHeader() {
 	fmt.Println("=== Timetag Correlation Analyzer ===")
-	fmt.Println("This program calculates time differences between consecutive events from two channels.")
+	fmt.Println("This program can analyze timetag data in two ways:")
+	fmt.Println("1. Calculate time differences between consecutive events from two channels")
+	fmt.Println("2. Export all time tag data to a human-readable CSV file")
 	fmt.Println()
+}
+
+func getOperationChoice() (int, error) {
+	fmt.Println("Choose operation:")
+	fmt.Println("1. Time difference analysis")
+	fmt.Println("2. Export to CSV")
+	fmt.Print("Enter your choice (1 or 2): ")
+
+	var choice int
+	_, err := fmt.Scanln(&choice)
+	if err != nil {
+		return 0, fmt.Errorf("please enter a valid number")
+	}
+
+	if choice != 1 && choice != 2 {
+		return 0, fmt.Errorf("please choose 1 or 2")
+	}
+
+	fmt.Println()
+	return choice, nil
 }
 
 func getUserChannelInput(processor *ttbin.Processor, availableChannels map[uint16]int) (uint16, uint16, error) {
@@ -277,4 +318,99 @@ func processBatch(batch []ttbin.TimeTag, channel1, channel2 uint16, writer *bufi
 func clearInputBuffer() {
 	var dummy string
 	fmt.Scanln(&dummy)
+}
+
+// exportToCSV exports all time tag data to a human-readable CSV file
+func exportToCSV(processor *ttbin.Processor, files []string, availableChannels map[uint16]int) error {
+	fmt.Printf("Found %d .ttbin file(s) to export:\n", len(availableChannels))
+	processor.DisplayChannels(availableChannels)
+
+	// Generate output filename with timestamp
+	outputFile := "timetag_export.csv"
+	fmt.Printf("\nExporting all time tag data to '%s'...\n\n", outputFile)
+
+	// Create output file
+	outFile, err := os.Create(outputFile)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %v", err)
+	}
+	defer outFile.Close()
+
+	writer := bufio.NewWriterSize(outFile, 64*1024)
+	defer writer.Flush()
+
+	// Write CSV header
+	fmt.Fprintf(writer, "Timestamp,Channel\n")
+
+	// Get all available channels for processing
+	var channels []uint16
+	for channel := range availableChannels {
+		channels = append(channels, channel)
+	}
+
+	timeTagsChan := make(chan ttbin.TimeTag, 1000)
+
+	// Process all files with all channels
+	go func() {
+		err := processor.ProcessFiles(files, channels, timeTagsChan)
+		if err != nil {
+			fmt.Printf("Warning: Error processing files: %v\n", err)
+		}
+	}()
+
+	return streamToCSV(timeTagsChan, writer)
+}
+
+// streamToCSV processes time tags and writes them to CSV format
+func streamToCSV(timeTagsChan <-chan ttbin.TimeTag, writer *bufio.Writer) error {
+	var batch []ttbin.TimeTag
+	totalTags := 0
+
+	fmt.Println("Processing and writing to CSV...")
+	fmt.Printf("Progress: [Time Tags Processed: %d]\n", totalTags)
+
+	for tag := range timeTagsChan {
+		batch = append(batch, tag)
+		totalTags++
+
+		// Show progress for every 1000 tags processed
+		if totalTags%1000 == 0 {
+			fmt.Printf("\rProgress: [Time Tags Processed: %d]", totalTags)
+		}
+
+		// Process batch when it reaches size limit
+		if len(batch) >= BatchSize {
+			writeCSVBatch(batch, writer)
+			batch = batch[:0] // Clear batch to free memory
+			writer.Flush()    // Ensure data is written regularly
+		}
+	}
+
+	// Process remaining batch
+	if len(batch) > 0 {
+		writeCSVBatch(batch, writer)
+	}
+
+	// Final progress update
+	fmt.Printf("\rProgress: [Time Tags Processed: %d]\n", totalTags)
+
+	if totalTags == 0 {
+		return fmt.Errorf("no time tags found in the files")
+	}
+
+	writer.Flush()
+	fmt.Printf("✓ CSV export complete: %d time tags exported\n", totalTags)
+	return nil
+}
+
+// writeCSVBatch writes a batch of time tags to the CSV file
+func writeCSVBatch(batch []ttbin.TimeTag, writer *bufio.Writer) {
+	// Sort batch by timestamp for chronological order
+	sort.Slice(batch, func(i, j int) bool {
+		return batch[i].Timestamp < batch[j].Timestamp
+	})
+
+	for _, tag := range batch {
+		fmt.Fprintf(writer, "%d,%d\n", tag.Timestamp, tag.Channel)
+	}
 }

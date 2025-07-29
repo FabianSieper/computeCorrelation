@@ -158,12 +158,12 @@ func (r *Reader) ProcessFiles(files []string, channelFilter []uint16, resultChan
 			// Atomic increment and progress display
 			atomic.AddInt32(&processedFiles, 1)
 			currentProcessed := atomic.LoadInt32(&processedFiles)
-			
+
 			if count > 0 {
-				fmt.Printf("  ✓ Extracted %d relevant time tags from %s [%d/%d files processed]\n", 
+				fmt.Printf("  ✓ Extracted %d relevant time tags from %s [%d/%d files processed]\n",
 					count, filename, currentProcessed, totalFiles)
 			} else {
-				fmt.Printf("  ○ No relevant time tags found in %s [%d/%d files processed]\n", 
+				fmt.Printf("  ○ No relevant time tags found in %s [%d/%d files processed]\n",
 					filename, currentProcessed, totalFiles)
 			}
 		}(file)
