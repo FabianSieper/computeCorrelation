@@ -80,7 +80,7 @@ func main() {
 		}
 
 		if len(availableChannels) > 0 {
-			fmt.Printf("Found channels in files - will export all data from all channels\n\n")
+			fmt.Printf("Found %d unique channels in first file - will export all data from all channels\n\n", len(availableChannels))
 		}
 
 		if err := exportToCSV(processor, files); err != nil {

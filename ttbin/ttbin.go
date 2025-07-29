@@ -85,10 +85,16 @@ func (p *Processor) QuickScanChannels(files []string) (map[uint16]int, error) {
 
 	fmt.Printf("Quick scanning first file to discover available channels...\n")
 
-	// Scan only the first file
-	channelCounts, err := p.reader.ScanSingleFile(files[0])
+	// Use ultra-fast channel discovery - just find channels, no counting
+	channels, err := p.reader.QuickDiscoverChannels(files[0])
 	if err != nil {
 		return nil, err
+	}
+
+	// Convert set to map with dummy counts for compatibility
+	channelCounts := make(map[uint16]int)
+	for channel := range channels {
+		channelCounts[channel] = 1 // Dummy count - we don't need actual counts for CSV export
 	}
 
 	fmt.Printf("Found %d unique channels in first file\n\n", len(channelCounts))

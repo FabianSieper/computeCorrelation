@@ -103,17 +103,30 @@ func (r *Reader) compareNatural(a, b string) int {
 	return 0
 }
 
-// ScanAvailableChannels scans all files sequentially to discover which channels contain events with progress logging
+// ScanAvailableChannels scans files in parallel to discover which channels contain events with progress logging
 func (r *Reader) ScanAvailableChannels(files []string) (map[uint16]int, error) {
-	channelCounts := make(map[uint16]int)
 	totalFiles := len(files)
 
-	fmt.Printf("Scanning %d files to discover available channels...\n", totalFiles)
+	fmt.Printf("Scanning %d files to discover available channels (parallel processing)...\n", totalFiles)
+
+	// For small numbers of files, use sequential processing to avoid overhead
+	if totalFiles <= 4 {
+		return r.scanAvailableChannelsSequential(files)
+	}
+
+	// Use parallel processing for larger file sets
+	return r.scanAvailableChannelsParallel(files)
+}
+
+// scanAvailableChannelsSequential processes files one by one (for small file sets)
+func (r *Reader) scanAvailableChannelsSequential(files []string) (map[uint16]int, error) {
+	channelCounts := make(map[uint16]int)
+	totalFiles := len(files)
 
 	for i, filepath := range files {
 		fmt.Printf("Scanning file: %s [%d/%d]\n", filepath, i+1, totalFiles)
 
-		localCounts, err := r.ScanSingleFile(filepath)
+		localCounts, err := r.ScanSingleFileOptimized(filepath)
 		if err != nil {
 			fmt.Printf("  ✗ Error scanning %s: %v\n", filepath, err)
 			continue // Skip files with errors
@@ -132,6 +145,74 @@ func (r *Reader) ScanAvailableChannels(files []string) (map[uint16]int, error) {
 			fmt.Printf("  ✓ Found %d channels with data in %s\n", channelsFound, filepath)
 		} else {
 			fmt.Printf("  ○ No channels found in %s\n", filepath)
+		}
+	}
+
+	fmt.Printf("Scanning complete: found %d unique channels across all files\n\n", len(channelCounts))
+	return channelCounts, nil
+}
+
+// scanAvailableChannelsParallel processes files in parallel batches
+func (r *Reader) scanAvailableChannelsParallel(files []string) (map[uint16]int, error) {
+	channelCounts := make(map[uint16]int)
+	totalFiles := len(files)
+
+	// Process files in parallel with limited concurrency
+	const maxWorkers = 6 // Optimal for most systems
+	semaphore := make(chan struct{}, maxWorkers)
+	resultChan := make(chan map[uint16]int, totalFiles)
+	errorChan := make(chan error, totalFiles)
+
+	var wg sync.WaitGroup
+
+	// Start workers
+	for i, filepath := range files {
+		wg.Add(1)
+		go func(filePath string, fileIndex int) {
+			defer wg.Done()
+
+			// Acquire semaphore
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			fmt.Printf("Scanning file: %s [%d/%d]\n", filePath, fileIndex+1, totalFiles)
+
+			localCounts, err := r.ScanSingleFileOptimized(filePath)
+			if err != nil {
+				fmt.Printf("  ✗ Error scanning %s: %v\n", filePath, err)
+				errorChan <- err
+				return
+			}
+
+			// Check if we found channels
+			channelsFound := 0
+			for _, count := range localCounts {
+				if count > 0 {
+					channelsFound++
+				}
+			}
+
+			if channelsFound > 0 {
+				fmt.Printf("  ✓ Found %d channels with data in %s\n", channelsFound, filePath)
+			} else {
+				fmt.Printf("  ○ No channels found in %s\n", filePath)
+			}
+
+			resultChan <- localCounts
+		}(filepath, i)
+	}
+
+	// Close channels when all workers are done
+	go func() {
+		wg.Wait()
+		close(resultChan)
+		close(errorChan)
+	}()
+
+	// Merge results
+	for localCounts := range resultChan {
+		for channel, count := range localCounts {
+			channelCounts[channel] += count
 		}
 	}
 
@@ -244,8 +325,8 @@ func (r *Reader) ProcessAllFiles(files []string, resultChan chan<- TimeTag) erro
 	return nil
 }
 
-// ScanSingleFile scans a single file for channel information
-func (r *Reader) ScanSingleFile(filepath string) (map[uint16]int, error) {
+// ScanSingleFileOptimized scans a single file for channel information with optimizations
+func (r *Reader) ScanSingleFileOptimized(filepath string) (map[uint16]int, error) {
 	localCounts := make(map[uint16]int)
 
 	file, err := os.Open(filepath)
@@ -263,7 +344,86 @@ func (r *Reader) ScanSingleFile(filepath string) (map[uint16]int, error) {
 		return localCounts, nil
 	}
 
+	// For Method #1, use the original comprehensive scanning approach
 	return r.processBlocksForScanning(filepath, timeTagBlocks, localCounts)
+}
+
+// ScanSingleFile scans a single file for channel information (legacy method)
+func (r *Reader) ScanSingleFile(filepath string) (map[uint16]int, error) {
+	return r.ScanSingleFileOptimized(filepath)
+}
+
+// QuickDiscoverChannels - ultra-fast channel discovery for CSV export (no counting needed)
+func (r *Reader) QuickDiscoverChannels(filepath string) (map[uint16]bool, error) {
+	channels := make(map[uint16]bool)
+
+	file, err := os.Open(filepath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %v", err)
+	}
+	defer file.Close()
+
+	timeTagBlocks, err := r.findTimeTagBlocks(file)
+	if err != nil {
+		return channels, nil // No TIME_TAG blocks in this file
+	}
+
+	if len(timeTagBlocks) == 0 {
+		return channels, nil
+	}
+
+	// Scan first 3 blocks for better channel discovery
+	maxBlocksToScan := 3
+	if len(timeTagBlocks) < maxBlocksToScan {
+		maxBlocksToScan = len(timeTagBlocks)
+	}
+
+	for i := 0; i < maxBlocksToScan; i++ {
+		r.quickDiscoverChannelsInBlock(file, timeTagBlocks[i], channels)
+
+		// Stop early if we found enough channels
+		if len(channels) >= 30 {
+			break
+		}
+	}
+
+	return channels, nil
+}
+
+func (r *Reader) quickDiscoverChannelsInBlock(file *os.File, block SITTBlockInfo, channels map[uint16]bool) {
+	dataStart := block.Position + SITTHeaderSize
+	_, err := file.Seek(int64(dataStart), io.SeekStart)
+	if err != nil {
+		return
+	}
+
+	reader := bufio.NewReader(file)
+
+	// Scan more events per block to find more channels
+	maxEvents := 200 // Increased from 50
+	dataSize := block.Length - SITTHeaderSize
+	maxPossibleEvents := int(dataSize / RecordSize)
+
+	if maxEvents > maxPossibleEvents {
+		maxEvents = maxPossibleEvents
+	}
+
+	buffer := make([]byte, RecordSize)
+
+	for eventCount := 0; eventCount < maxEvents; eventCount++ {
+		n, err := reader.Read(buffer)
+		if err != nil || n < RecordSize {
+			break
+		}
+
+		// Parse channel only (we don't need timestamp for discovery)
+		channel := binary.LittleEndian.Uint16(buffer[8:10])
+
+		// Quick validation and store
+		if channel < 65535 {
+			channels[channel] = true
+		}
+	}
 }
 
 func (r *Reader) openAndValidateFile(filename string) (*os.File, error) {
@@ -698,6 +858,70 @@ func (r *Reader) processBlocksForScanning(filepath string, timeTagBlocks []SITTB
 
 	blockWg.Wait()
 	return localCounts, nil
+}
+
+// processBlocksForScanningOptimized - faster scanning with strategic sampling
+func (r *Reader) processBlocksForScanningOptimized(file *os.File, timeTagBlocks []SITTBlockInfo, localCounts map[uint16]int) (map[uint16]int, error) {
+	// For method #1 channel discovery, we need to be more thorough than the quick scan
+	// We'll scan more blocks but with optimized reading per block
+
+	maxBlocksToScan := len(timeTagBlocks) // Scan all blocks for method #1
+	if maxBlocksToScan > 10 {
+		maxBlocksToScan = 10 // But limit to first 10 blocks for performance
+	}
+
+	for i := 0; i < maxBlocksToScan; i++ {
+		block := timeTagBlocks[i]
+		counts := r.scanSingleBlockOptimized(file, block)
+
+		for channel, count := range counts {
+			localCounts[channel] += count
+		}
+	}
+
+	return localCounts, nil
+}
+
+func (r *Reader) scanSingleBlockOptimized(file *os.File, block SITTBlockInfo) map[uint16]int {
+	blockCounts := make(map[uint16]int)
+
+	dataStart := block.Position + SITTHeaderSize
+	_, err := file.Seek(int64(dataStart), io.SeekStart)
+	if err != nil {
+		return blockCounts
+	}
+
+	reader := bufio.NewReader(file)
+
+	// For method #1: scan more events to ensure we find all channels
+	maxEvents := 500 // Increased from 100 to find more channels
+	dataSize := block.Length - SITTHeaderSize
+	maxPossibleEvents := int(dataSize / RecordSize)
+
+	if maxEvents > maxPossibleEvents {
+		maxEvents = maxPossibleEvents
+	}
+
+	// Pre-allocate buffer for better performance
+	buffer := make([]byte, RecordSize)
+
+	for eventCount := 0; eventCount < maxEvents; eventCount++ {
+		n, err := reader.Read(buffer)
+		if err != nil || n < RecordSize {
+			break
+		}
+
+		// Parse directly from buffer
+		timetag := binary.LittleEndian.Uint64(buffer[0:8])
+		channel := binary.LittleEndian.Uint16(buffer[8:10])
+
+		// Quick validation
+		if timetag > 0 && channel < 65535 {
+			blockCounts[channel]++
+		}
+	}
+
+	return blockCounts
 }
 
 func (r *Reader) scanBlocksWorker(filepath string, blockChan <-chan SITTBlockInfo) map[uint16]int {
