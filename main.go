@@ -322,9 +322,8 @@ func clearInputBuffer() {
 
 // exportToCSV exports all time tag data to a human-readable CSV file
 func exportToCSV(processor *ttbin.Processor, files []string, availableChannels map[uint16]int) error {
-	fmt.Printf("Found %d .ttbin file(s) to export:\n", len(availableChannels))
-	processor.DisplayChannels(availableChannels)
-
+	fmt.Printf("Found %d .ttbin file(s) to export:\n", len(files))
+	
 	// Generate output filename with timestamp
 	outputFile := "timetag_export.csv"
 	fmt.Printf("\nExporting all time tag data to '%s'...\n\n", outputFile)
@@ -342,17 +341,11 @@ func exportToCSV(processor *ttbin.Processor, files []string, availableChannels m
 	// Write CSV header
 	fmt.Fprintf(writer, "Timestamp,Channel\n")
 
-	// Get all available channels for processing
-	var channels []uint16
-	for channel := range availableChannels {
-		channels = append(channels, channel)
-	}
-
 	timeTagsChan := make(chan ttbin.TimeTag, 1000)
 
-	// Process all files with all channels
+	// Process all files without channel filtering - extract ALL time tags
 	go func() {
-		err := processor.ProcessFiles(files, channels, timeTagsChan)
+		err := processor.ProcessAllFiles(files, timeTagsChan)
 		if err != nil {
 			fmt.Printf("Warning: Error processing files: %v\n", err)
 		}

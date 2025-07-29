@@ -97,6 +97,12 @@ func (p *Processor) ProcessFiles(files []string, channelFilter []uint16, resultC
 	return p.reader.ProcessFiles(files, channelFilter, resultChan)
 }
 
+// ProcessAllFiles processes multiple files in parallel, extracting ALL time tags without any channel filtering
+// The results are sent to the provided channel. The channel will be closed when processing is complete.
+func (p *Processor) ProcessAllFiles(files []string, resultChan chan<- TimeTag) error {
+	return p.reader.ProcessAllFiles(files, resultChan)
+}
+
 // ProcessFile processes a single file, filtering for specified channels
 func (p *Processor) ProcessFile(filename string, channelFilter []uint16, resultChan chan<- TimeTag) (int, error) {
 	return p.reader.ProcessFileOptimized(filename, channelFilter, resultChan)

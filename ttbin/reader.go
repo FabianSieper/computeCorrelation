@@ -121,6 +121,27 @@ func (r *Reader) ProcessFileOptimized(filename string, channelFilter []uint16, r
 	return r.processBlocksInParallel(file, allBlocks, channelFilter, resultChan)
 }
 
+// ProcessFileUnfiltered processes a single file extracting ALL time tags without any channel filtering
+func (r *Reader) ProcessFileUnfiltered(filename string, resultChan chan<- TimeTag) (int, error) {
+	file, err := r.openAndValidateFile(filename)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+
+	// Use the same logic as scanning but read ALL events instead of just a sample
+	timeTagBlocks, err := r.findTimeTagBlocks(file)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(timeTagBlocks) == 0 {
+		return 0, nil
+	}
+
+	return r.processAllEventsInBlocks(file, timeTagBlocks, resultChan)
+}
+
 // ProcessFiles processes multiple files in parallel with channel filtering
 func (r *Reader) ProcessFiles(files []string, channelFilter []uint16, resultChan chan<- TimeTag) error {
 	var wg sync.WaitGroup
@@ -164,6 +185,71 @@ func (r *Reader) ProcessFiles(files []string, channelFilter []uint16, resultChan
 					count, filename, currentProcessed, totalFiles)
 			} else {
 				fmt.Printf("  ○ No relevant time tags found in %s [%d/%d files processed]\n",
+					filename, currentProcessed, totalFiles)
+			}
+		}(file)
+	}
+
+	// Close channel when all workers are done
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	// Wait for all goroutines to complete
+	wg.Wait()
+
+	// Check for processing errors
+	if len(processingErrors) > 0 {
+		return fmt.Errorf("processing errors occurred: %d files had errors", len(processingErrors))
+	}
+
+	return nil
+}
+
+// ProcessAllFiles processes multiple files in parallel without any channel filtering - extracts ALL time tags
+func (r *Reader) ProcessAllFiles(files []string, resultChan chan<- TimeTag) error {
+	var wg sync.WaitGroup
+	var processingErrors []error
+	var errorMu sync.Mutex
+	var processedFiles int32
+	totalFiles := len(files)
+
+	fmt.Printf("Processing %d files...\n", totalFiles)
+
+	maxConcurrency := MaxConcurrency
+	if len(files) < maxConcurrency {
+		maxConcurrency = len(files)
+	}
+	semaphore := make(chan struct{}, maxConcurrency)
+
+	for _, file := range files {
+		wg.Add(1)
+		go func(filename string) {
+			defer wg.Done()
+			defer func() { <-semaphore }()
+
+			semaphore <- struct{}{}
+
+			fmt.Printf("Processing file: %s\n", filename)
+			count, err := r.ProcessFileUnfiltered(filename, resultChan)
+			if err != nil {
+				errorMu.Lock()
+				processingErrors = append(processingErrors, fmt.Errorf("error reading %s: %v", filename, err))
+				errorMu.Unlock()
+				fmt.Printf("  ✗ Error processing %s: %v\n", filename, err)
+				return
+			}
+
+			// Atomic increment and progress display
+			atomic.AddInt32(&processedFiles, 1)
+			currentProcessed := atomic.LoadInt32(&processedFiles)
+
+			if count > 0 {
+				fmt.Printf("  ✓ Extracted %d time tags from %s [%d/%d files processed]\n",
+					count, filename, currentProcessed, totalFiles)
+			} else {
+				fmt.Printf("  ○ No time tags found in %s [%d/%d files processed]\n",
 					filename, currentProcessed, totalFiles)
 			}
 		}(file)
@@ -304,6 +390,47 @@ func (r *Reader) processBlocksInParallel(file *os.File, allBlocks []SITTBlockInf
 	return int(totalCount), nil
 }
 
+func (r *Reader) processBlocksUnfiltered(file *os.File, allBlocks []SITTBlockInfo, resultChan chan<- TimeTag) (int, error) {
+	const maxBlockWorkers = 8
+	blockChan := make(chan SITTBlockInfo, len(allBlocks))
+	var blockWg sync.WaitGroup
+	var totalCount int64
+	var countMu sync.Mutex
+
+	numWorkers := maxBlockWorkers
+	if len(allBlocks) < numWorkers {
+		numWorkers = len(allBlocks)
+	}
+
+	for i := 0; i < numWorkers; i++ {
+		blockWg.Add(1)
+		go func() {
+			defer blockWg.Done()
+			localCount := 0
+
+			for block := range blockChan {
+				count, err := r.processBlockUnfiltered(file, block, resultChan)
+				if err != nil {
+					continue // Skip blocks with errors
+				}
+				localCount += count
+			}
+
+			countMu.Lock()
+			totalCount += int64(localCount)
+			countMu.Unlock()
+		}()
+	}
+
+	for _, block := range allBlocks {
+		blockChan <- block
+	}
+	close(blockChan)
+
+	blockWg.Wait()
+	return int(totalCount), nil
+}
+
 // processBlockOptimized processes a single SITT block with filtering
 func (r *Reader) processBlockOptimized(file *os.File, block SITTBlockInfo, channelFilter map[uint16]bool, resultChan chan<- TimeTag) (int, error) {
 	// Create a separate file handle for this worker to avoid race conditions
@@ -313,7 +440,8 @@ func (r *Reader) processBlockOptimized(file *os.File, block SITTBlockInfo, chann
 	}
 	defer workerFile.Close()
 
-	if _, err := workerFile.Seek(int64(block.Position+SITTHeaderSize), io.SeekStart); err != nil {
+	dataStart := block.Position + SITTHeaderSize
+	if _, err := workerFile.Seek(int64(dataStart), io.SeekStart); err != nil {
 		return 0, err
 	}
 
@@ -322,29 +450,116 @@ func (r *Reader) processBlockOptimized(file *os.File, block SITTBlockInfo, chann
 		return 0, nil
 	}
 
-	data, err := r.readDataBlock(workerFile, dataSize)
+	// Use buffered reader for better performance
+	reader := bufio.NewReader(workerFile)
+	count := 0
+	eventCount := 0
+	maxEvents := int(dataSize / RecordSize)
+
+	// Read all records in the block using binary.Read for consistency with scanning
+	for eventCount < maxEvents {
+		var timestamp uint64
+		var channel uint16
+
+		// Read timestamp (8 bytes, little endian)
+		err := binary.Read(reader, binary.LittleEndian, &timestamp)
+		if err != nil {
+			if err == io.EOF {
+				break // End of data
+			}
+			return count, err
+		}
+
+		// Read channel (2 bytes, little endian)
+		err = binary.Read(reader, binary.LittleEndian, &channel)
+		if err != nil {
+			if err == io.EOF {
+				break // End of data
+			}
+			return count, err
+		}
+
+		eventCount++
+
+		// Validate and filter the time tag
+		if r.isValidTimeTag(channel, timestamp) && channelFilter[channel] {
+			tag := TimeTag{Timestamp: timestamp, Channel: channel}
+			select {
+			case resultChan <- tag:
+				count++
+			default:
+				// Channel is full, this shouldn't happen with proper buffering
+				// but we handle it gracefully
+				resultChan <- tag
+				count++
+			}
+		}
+	}
+
+	return count, nil
+}
+
+// processBlockUnfiltered processes a single SITT block without any channel filtering - extracts ALL time tags
+func (r *Reader) processBlockUnfiltered(file *os.File, block SITTBlockInfo, resultChan chan<- TimeTag) (int, error) {
+	// Create a separate file handle for this worker to avoid race conditions
+	workerFile, err := os.Open(file.Name())
 	if err != nil {
 		return 0, err
 	}
+	defer workerFile.Close()
 
-	// Parse and filter in one pass
+	dataStart := block.Position + SITTHeaderSize
+	if _, err := workerFile.Seek(int64(dataStart), io.SeekStart); err != nil {
+		return 0, err
+	}
+
+	dataSize := r.calculateDataSize(block.Length)
+	if dataSize == 0 {
+		return 0, nil
+	}
+
+	// Use buffered reader for better performance
+	reader := bufio.NewReader(workerFile)
 	count := 0
-	// Each record is 10 bytes: timestamp(8 bytes) + channel(2 bytes)
-	for i := 0; i < len(data); i += RecordSize {
-		if i+RecordSize <= len(data) {
-			if tag := r.tryParseTimeTag(data[i : i+RecordSize]); tag != nil {
-				// Filter for target channels only
-				if channelFilter[tag.Channel] {
-					select {
-					case resultChan <- *tag:
-						count++
-					default:
-						// Channel is full, this shouldn't happen with proper buffering
-						// but we handle it gracefully
-						resultChan <- *tag
-						count++
-					}
-				}
+	eventCount := 0
+	maxEvents := int(dataSize / RecordSize)
+
+	// Read all records in the block using binary.Read
+	for eventCount < maxEvents {
+		var timestamp uint64
+		var channel uint16
+
+		// Read timestamp (8 bytes, little endian)
+		err := binary.Read(reader, binary.LittleEndian, &timestamp)
+		if err != nil {
+			if err == io.EOF {
+				break // End of data
+			}
+			return count, err
+		}
+
+		// Read channel (2 bytes, little endian)
+		err = binary.Read(reader, binary.LittleEndian, &channel)
+		if err != nil {
+			if err == io.EOF {
+				break // End of data
+			}
+			return count, err
+		}
+
+		eventCount++
+
+		// Validate the time tag but don't filter by channel - extract ALL time tags
+		if r.isValidTimeTag(channel, timestamp) {
+			tag := TimeTag{Timestamp: timestamp, Channel: channel}
+			select {
+			case resultChan <- tag:
+				count++
+			default:
+				// Channel is full, this shouldn't happen with proper buffering
+				// but we handle it gracefully
+				resultChan <- tag
+				count++
 			}
 		}
 	}
@@ -464,7 +679,7 @@ func (r *Reader) isValidTimeTag(channel uint16, timestamp uint64) bool {
 }
 
 func (r *Reader) findTimeTagBlocks(file *os.File) ([]SITTBlockInfo, error) {
-	blockTypes := []uint32{0x01, 0x02, 0x03}
+	blockTypes := []uint32{0x01, 0x03, 0x04} // Based on analysis: type 3 and 4 contain time tag data
 	var timeTagBlocks []SITTBlockInfo
 
 	for _, blockType := range blockTypes {
@@ -568,4 +783,57 @@ func (r *Reader) scanSingleBlock(workerFile *os.File, block SITTBlockInfo) map[u
 	}
 
 	return blockCounts
+}
+
+// processAllEventsInBlocks processes all events in the blocks (not just a sample like scanning)
+func (r *Reader) processAllEventsInBlocks(file *os.File, timeTagBlocks []SITTBlockInfo, resultChan chan<- TimeTag) (int, error) {
+	totalCount := 0
+
+	for _, block := range timeTagBlocks {
+		dataStart := block.Position + SITTHeaderSize
+		_, err := file.Seek(int64(dataStart), io.SeekStart)
+		if err != nil {
+			continue // Skip this block
+		}
+
+		reader := bufio.NewReader(file)
+		eventCount := 0
+		dataSize := block.Length - SITTHeaderSize
+
+		// Read ALL events in this block (not limited like scanning)
+		maxEvents := int(dataSize / RecordSize)
+		for eventCount < maxEvents {
+			var timestamp uint64
+			var channel uint16
+
+			// Read timestamp (8 bytes, little endian)
+			err := binary.Read(reader, binary.LittleEndian, &timestamp)
+			if err != nil {
+				break // End of data or error
+			}
+
+			// Read channel (2 bytes, little endian)
+			err = binary.Read(reader, binary.LittleEndian, &channel)
+			if err != nil {
+				break // End of data or error
+			}
+
+			eventCount++
+
+			// Validate and send the time tag (no channel filtering)
+			if r.isValidTimeTag(channel, timestamp) {
+				tag := TimeTag{Timestamp: timestamp, Channel: channel}
+				select {
+				case resultChan <- tag:
+					totalCount++
+				default:
+					// Channel is full, but handle gracefully
+					resultChan <- tag
+					totalCount++
+				}
+			}
+		}
+	}
+
+	return totalCount, nil
 }

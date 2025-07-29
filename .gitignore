@@ -36,3 +36,5 @@ main_final.go
 
 # Log files
 *.log
+
+timetag_export.csv
