@@ -8,9 +8,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"sync"
-	"sync/atomic"
 )
 
 // Constants for ttbin file processing
@@ -49,7 +50,7 @@ func NewReader(dataDirectory string) *Reader {
 	}
 }
 
-// GetTimeTaFiles returns all .ttbin files sorted lexicographically
+// GetTimeTaFiles returns all .ttbin files sorted naturally (numeric-aware)
 func (r *Reader) GetTimeTaFiles() ([]string, error) {
 	// Check if directory exists
 	if _, err := os.Stat(r.DataDirectory); os.IsNotExist(err) {
@@ -62,46 +63,79 @@ func (r *Reader) GetTimeTaFiles() ([]string, error) {
 		return nil, fmt.Errorf("failed to search for .ttbin files: %v", err)
 	}
 
-	sort.Strings(files)
+	// Use natural sorting to handle numeric parts correctly
+	sort.Slice(files, func(i, j int) bool {
+		return r.compareNatural(files[i], files[j]) < 0
+	})
 	return files, nil
 }
 
-// ScanAvailableChannels scans all files to discover which channels contain events using optimized parallel processing
+// compareNatural compares two strings using natural/numeric ordering
+// Simplified approach: extract numbers from filenames and compare them numerically
+func (r *Reader) compareNatural(a, b string) int {
+	// Simple regex to find the first numeric sequence in each filename
+	re := regexp.MustCompile(`\.(\d+)\.ttbin$`)
+
+	matchA := re.FindStringSubmatch(a)
+	matchB := re.FindStringSubmatch(b)
+
+	// If both have numeric parts, compare numerically
+	if len(matchA) > 1 && len(matchB) > 1 {
+		numA, errA := strconv.Atoi(matchA[1])
+		numB, errB := strconv.Atoi(matchB[1])
+
+		if errA == nil && errB == nil {
+			if numA != numB {
+				if numA < numB {
+					return -1
+				}
+				return 1
+			}
+		}
+	}
+
+	// Fallback to lexicographical comparison
+	if a < b {
+		return -1
+	} else if a > b {
+		return 1
+	}
+	return 0
+}
+
+// ScanAvailableChannels scans all files sequentially to discover which channels contain events with progress logging
 func (r *Reader) ScanAvailableChannels(files []string) (map[uint16]int, error) {
 	channelCounts := make(map[uint16]int)
-	var mu sync.Mutex
-	var wg sync.WaitGroup
+	totalFiles := len(files)
 
-	// Process files in parallel for scanning
-	maxConcurrency := MaxConcurrency
-	if len(files) < maxConcurrency {
-		maxConcurrency = len(files)
-	}
-	semaphore := make(chan struct{}, maxConcurrency)
+	fmt.Printf("Scanning %d files to discover available channels...\n", totalFiles)
 
-	for _, filepath := range files {
-		wg.Add(1)
-		go func(filename string) {
-			defer wg.Done()
-			defer func() { <-semaphore }()
+	for i, filepath := range files {
+		fmt.Printf("Scanning file: %s [%d/%d]\n", filepath, i+1, totalFiles)
 
-			semaphore <- struct{}{} // Acquire semaphore
+		localCounts, err := r.ScanSingleFile(filepath)
+		if err != nil {
+			fmt.Printf("  ✗ Error scanning %s: %v\n", filepath, err)
+			continue // Skip files with errors
+		}
 
-			localCounts, err := r.scanSingleFile(filename)
-			if err != nil {
-				return // Skip files with errors
+		// Merge results
+		channelsFound := 0
+		for channel, count := range localCounts {
+			channelCounts[channel] += count
+			if count > 0 {
+				channelsFound++
 			}
+		}
 
-			// Merge results thread-safely
-			mu.Lock()
-			for channel, count := range localCounts {
-				channelCounts[channel] += count
-			}
-			mu.Unlock()
-		}(filepath)
+		if channelsFound > 0 {
+			fmt.Printf("  ✓ Found %d channels with data in %s\n", channelsFound, filepath)
+		} else {
+			fmt.Printf("  ○ No channels found in %s\n", filepath)
+		}
 	}
 
-	wg.Wait()
+	fmt.Printf("Scanning complete: found %d unique channels across all files\n\n", len(channelCounts))
 	return channelCounts, nil
 }
 
@@ -142,62 +176,31 @@ func (r *Reader) ProcessFileUnfiltered(filename string, resultChan chan<- TimeTa
 	return r.processAllEventsInBlocks(file, timeTagBlocks, resultChan)
 }
 
-// ProcessFiles processes multiple files in parallel with channel filtering
+// ProcessFiles processes multiple files sequentially in lexicographical order with channel filtering
 func (r *Reader) ProcessFiles(files []string, channelFilter []uint16, resultChan chan<- TimeTag) error {
-	var wg sync.WaitGroup
 	var processingErrors []error
-	var errorMu sync.Mutex
-	var processedFiles int32
 	totalFiles := len(files)
 
-	fmt.Printf("Processing %d files...\n", totalFiles)
+	fmt.Printf("Processing %d files in lexicographical order...\n", totalFiles)
 
-	maxConcurrency := MaxConcurrency
-	if len(files) < maxConcurrency {
-		maxConcurrency = len(files)
-	}
-	semaphore := make(chan struct{}, maxConcurrency)
+	for i, file := range files {
+		fmt.Printf("Processing file: %s [%d/%d]\n", file, i+1, totalFiles)
+		count, err := r.ProcessFileOptimized(file, channelFilter, resultChan)
+		if err != nil {
+			processingErrors = append(processingErrors, fmt.Errorf("error reading %s: %v", file, err))
+			fmt.Printf("  ✗ Error processing %s: %v\n", file, err)
+			continue
+		}
 
-	for _, file := range files {
-		wg.Add(1)
-		go func(filename string) {
-			defer wg.Done()
-			defer func() { <-semaphore }()
-
-			semaphore <- struct{}{}
-
-			fmt.Printf("Processing file: %s\n", filename)
-			count, err := r.ProcessFileOptimized(filename, channelFilter, resultChan)
-			if err != nil {
-				errorMu.Lock()
-				processingErrors = append(processingErrors, fmt.Errorf("error reading %s: %v", filename, err))
-				errorMu.Unlock()
-				fmt.Printf("  ✗ Error processing %s: %v\n", filename, err)
-				return
-			}
-
-			// Atomic increment and progress display
-			atomic.AddInt32(&processedFiles, 1)
-			currentProcessed := atomic.LoadInt32(&processedFiles)
-
-			if count > 0 {
-				fmt.Printf("  ✓ Extracted %d relevant time tags from %s [%d/%d files processed]\n",
-					count, filename, currentProcessed, totalFiles)
-			} else {
-				fmt.Printf("  ○ No relevant time tags found in %s [%d/%d files processed]\n",
-					filename, currentProcessed, totalFiles)
-			}
-		}(file)
+		if count > 0 {
+			fmt.Printf("  ✓ Extracted %d relevant time tags from %s\n", count, file)
+		} else {
+			fmt.Printf("  ○ No relevant time tags found in %s\n", file)
+		}
 	}
 
-	// Close channel when all workers are done
-	go func() {
-		wg.Wait()
-		close(resultChan)
-	}()
-
-	// Wait for all goroutines to complete
-	wg.Wait()
+	// Close channel when all files are processed
+	close(resultChan)
 
 	// Check for processing errors
 	if len(processingErrors) > 0 {
@@ -207,62 +210,31 @@ func (r *Reader) ProcessFiles(files []string, channelFilter []uint16, resultChan
 	return nil
 }
 
-// ProcessAllFiles processes multiple files in parallel without any channel filtering - extracts ALL time tags
+// ProcessAllFiles processes multiple files sequentially in lexicographical order without any channel filtering - extracts ALL time tags
 func (r *Reader) ProcessAllFiles(files []string, resultChan chan<- TimeTag) error {
-	var wg sync.WaitGroup
 	var processingErrors []error
-	var errorMu sync.Mutex
-	var processedFiles int32
 	totalFiles := len(files)
 
-	fmt.Printf("Processing %d files...\n", totalFiles)
+	fmt.Printf("Processing %d files in lexicographical order...\n", totalFiles)
 
-	maxConcurrency := MaxConcurrency
-	if len(files) < maxConcurrency {
-		maxConcurrency = len(files)
-	}
-	semaphore := make(chan struct{}, maxConcurrency)
+	for i, file := range files {
+		fmt.Printf("Processing file: %s [%d/%d]\n", file, i+1, totalFiles)
+		count, err := r.ProcessFileUnfiltered(file, resultChan)
+		if err != nil {
+			processingErrors = append(processingErrors, fmt.Errorf("error reading %s: %v", file, err))
+			fmt.Printf("  ✗ Error processing %s: %v\n", file, err)
+			continue
+		}
 
-	for _, file := range files {
-		wg.Add(1)
-		go func(filename string) {
-			defer wg.Done()
-			defer func() { <-semaphore }()
-
-			semaphore <- struct{}{}
-
-			fmt.Printf("Processing file: %s\n", filename)
-			count, err := r.ProcessFileUnfiltered(filename, resultChan)
-			if err != nil {
-				errorMu.Lock()
-				processingErrors = append(processingErrors, fmt.Errorf("error reading %s: %v", filename, err))
-				errorMu.Unlock()
-				fmt.Printf("  ✗ Error processing %s: %v\n", filename, err)
-				return
-			}
-
-			// Atomic increment and progress display
-			atomic.AddInt32(&processedFiles, 1)
-			currentProcessed := atomic.LoadInt32(&processedFiles)
-
-			if count > 0 {
-				fmt.Printf("  ✓ Extracted %d time tags from %s [%d/%d files processed]\n",
-					count, filename, currentProcessed, totalFiles)
-			} else {
-				fmt.Printf("  ○ No time tags found in %s [%d/%d files processed]\n",
-					filename, currentProcessed, totalFiles)
-			}
-		}(file)
+		if count > 0 {
+			fmt.Printf("  ✓ Extracted %d time tags from %s\n", count, file)
+		} else {
+			fmt.Printf("  ○ No time tags found in %s\n", file)
+		}
 	}
 
-	// Close channel when all workers are done
-	go func() {
-		wg.Wait()
-		close(resultChan)
-	}()
-
-	// Wait for all goroutines to complete
-	wg.Wait()
+	// Close channel when all files are processed
+	close(resultChan)
 
 	// Check for processing errors
 	if len(processingErrors) > 0 {
@@ -272,8 +244,8 @@ func (r *Reader) ProcessAllFiles(files []string, resultChan chan<- TimeTag) erro
 	return nil
 }
 
-// scanSingleFile scans a single file for channel information
-func (r *Reader) scanSingleFile(filepath string) (map[uint16]int, error) {
+// ScanSingleFile scans a single file for channel information
+func (r *Reader) ScanSingleFile(filepath string) (map[uint16]int, error) {
 	localCounts := make(map[uint16]int)
 
 	file, err := os.Open(filepath)

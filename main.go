@@ -42,12 +42,6 @@ func main() {
 		return
 	}
 
-	availableChannels, err := processor.ScanChannels(files)
-	if err != nil {
-		handleError(err)
-		return
-	}
-
 	// Get user's choice of operation
 	operation, err := getOperationChoice()
 	if err != nil {
@@ -57,6 +51,12 @@ func main() {
 
 	switch operation {
 	case 1: // Time difference analysis
+		availableChannels, err := processor.ScanChannels(files)
+		if err != nil {
+			handleError(err)
+			return
+		}
+
 		channel1, channel2, err := getUserChannelInput(processor, availableChannels)
 		if err != nil {
 			handleError(err)
@@ -71,7 +71,19 @@ func main() {
 		fmt.Printf("✓ SUCCESS: Results saved successfully")
 
 	case 2: // CSV export
-		if err := exportToCSV(processor, files, availableChannels); err != nil {
+		// For CSV export, we only need a quick scan of one file to discover channels for display
+		// Since we export ALL channels anyway, we don't need full channel counts
+		availableChannels, err := processor.QuickScanChannels(files)
+		if err != nil {
+			handleError(err)
+			return
+		}
+
+		if len(availableChannels) > 0 {
+			fmt.Printf("Found channels in files - will export all data from all channels\n\n")
+		}
+
+		if err := exportToCSV(processor, files); err != nil {
 			handleError(err)
 			return
 		}
@@ -321,9 +333,9 @@ func clearInputBuffer() {
 }
 
 // exportToCSV exports all time tag data to a human-readable CSV file
-func exportToCSV(processor *ttbin.Processor, files []string, availableChannels map[uint16]int) error {
+func exportToCSV(processor *ttbin.Processor, files []string) error {
 	fmt.Printf("Found %d .ttbin file(s) to export:\n", len(files))
-	
+
 	// Generate output filename with timestamp
 	outputFile := "timetag_export.csv"
 	fmt.Printf("\nExporting all time tag data to '%s'...\n\n", outputFile)

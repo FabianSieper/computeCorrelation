@@ -76,6 +76,25 @@ func (p *Processor) ScanChannels(files []string) (map[uint16]int, error) {
 	return p.reader.ScanAvailableChannels(files)
 }
 
+// QuickScanChannels scans only the first file to discover available channels for display purposes
+// This is useful for CSV export where we don't need precise counts, just channel discovery
+func (p *Processor) QuickScanChannels(files []string) (map[uint16]int, error) {
+	if len(files) == 0 {
+		return make(map[uint16]int), nil
+	}
+
+	fmt.Printf("Quick scanning first file to discover available channels...\n")
+
+	// Scan only the first file
+	channelCounts, err := p.reader.ScanSingleFile(files[0])
+	if err != nil {
+		return nil, err
+	}
+
+	fmt.Printf("Found %d unique channels in first file\n\n", len(channelCounts))
+	return channelCounts, nil
+}
+
 // DisplayChannels prints the available channels in a formatted way
 func (p *Processor) DisplayChannels(channels map[uint16]int) {
 	p.helper.DisplayAvailableChannels(channels)
@@ -149,7 +168,7 @@ type FileInfo struct {
 
 // QuickScan performs a quick scan of a single file to get basic information
 func (p *Processor) QuickScan(filename string) (*FileInfo, error) {
-	channels, err := p.reader.scanSingleFile(filename)
+	channels, err := p.reader.ScanSingleFile(filename)
 	if err != nil {
 		return nil, err
 	}
