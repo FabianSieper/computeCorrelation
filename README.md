@@ -173,15 +173,31 @@ chmod +x bin/computeCorrelation
 
 ### Building for Different Platforms
 
-We provide automated build scripts to create executables for all supported operating systems:
+We provide both modern Taskfile and traditional build scripts to create executables for all supported operating systems:
 
-#### Unix/Linux/macOS (Recommended)
+#### Using Taskfile (Recommended)
+
+```bash
+# Build for all platforms
+task build-all
+
+# Or build for specific platforms
+task build-windows      # Windows amd64
+task build-macos-intel  # macOS Intel (amd64) 
+task build-macos-arm    # macOS Apple Silicon (arm64)
+task build-linux        # Linux amd64
+task build-current      # Current platform only
+```
+
+#### Using Traditional Build Scripts
+
+##### Unix/Linux/macOS
 
 ```bash
 ./build.sh
 ```
 
-#### Windows
+##### Windows
 
 ```cmd
 build.bat

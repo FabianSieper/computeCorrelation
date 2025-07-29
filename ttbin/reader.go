@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 )
 
 // Constants for ttbin file processing
@@ -125,6 +126,10 @@ func (r *Reader) ProcessFiles(files []string, channelFilter []uint16, resultChan
 	var wg sync.WaitGroup
 	var processingErrors []error
 	var errorMu sync.Mutex
+	var processedFiles int32
+	totalFiles := len(files)
+
+	fmt.Printf("Processing %d files...\n", totalFiles)
 
 	maxConcurrency := MaxConcurrency
 	if len(files) < maxConcurrency {
@@ -140,16 +145,26 @@ func (r *Reader) ProcessFiles(files []string, channelFilter []uint16, resultChan
 
 			semaphore <- struct{}{}
 
+			fmt.Printf("Processing file: %s\n", filename)
 			count, err := r.ProcessFileOptimized(filename, channelFilter, resultChan)
 			if err != nil {
 				errorMu.Lock()
 				processingErrors = append(processingErrors, fmt.Errorf("error reading %s: %v", filename, err))
 				errorMu.Unlock()
+				fmt.Printf("  ✗ Error processing %s: %v\n", filename, err)
 				return
 			}
 
-			if count == 0 {
-				// This is normal - not all files may contain events for target channels
+			// Atomic increment and progress display
+			atomic.AddInt32(&processedFiles, 1)
+			currentProcessed := atomic.LoadInt32(&processedFiles)
+			
+			if count > 0 {
+				fmt.Printf("  ✓ Extracted %d relevant time tags from %s [%d/%d files processed]\n", 
+					count, filename, currentProcessed, totalFiles)
+			} else {
+				fmt.Printf("  ○ No relevant time tags found in %s [%d/%d files processed]\n", 
+					filename, currentProcessed, totalFiles)
 			}
 		}(file)
 	}

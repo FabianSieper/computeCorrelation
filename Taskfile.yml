@@ -1,0 +1,139 @@
+version: '3'
+
+vars:
+  BINARY_NAME: computeCorrelation
+  BIN_DIR: bin
+  LDFLAGS: "-s -w"
+  MAIN_FILE: main.go
+
+tasks:
+  default:
+    desc: Build for current platform
+    cmds:
+      - task: build-current
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -rf {{.BIN_DIR}}
+      - mkdir -p {{.BIN_DIR}}
+
+  ensure-bin-dir:
+    desc: Ensure bin directory exists
+    cmds:
+      - mkdir -p {{.BIN_DIR}}
+
+  build-current:
+    desc: Build binary for current platform
+    deps: [ensure-bin-dir]
+    cmds:
+      - echo "Building for current platform..."
+      - go build -ldflags="{{.LDFLAGS}}" -o {{.BIN_DIR}}/{{.BINARY_NAME}} {{.MAIN_FILE}}
+      - echo "✓ Current platform binary built successfully"
+
+  build-windows:
+    desc: Build Windows binary
+    deps: [ensure-bin-dir]
+    cmds:
+      - echo "Building for Windows (amd64)..."
+      - GOOS=windows GOARCH=amd64 go build -ldflags="{{.LDFLAGS}}" -o {{.BIN_DIR}}/{{.BINARY_NAME}}.exe {{.MAIN_FILE}}
+      - echo "✓ Windows binary built successfully"
+
+  build-macos-intel:
+    desc: Build macOS Intel binary
+    deps: [ensure-bin-dir]
+    cmds:
+      - echo "Building for macOS Intel (amd64)..."
+      - GOOS=darwin GOARCH=amd64 go build -ldflags="{{.LDFLAGS}}" -o {{.BIN_DIR}}/{{.BINARY_NAME}}-darwin-amd64 {{.MAIN_FILE}}
+      - echo "✓ macOS Intel binary built successfully"
+
+  build-macos-arm:
+    desc: Build macOS Apple Silicon binary
+    deps: [ensure-bin-dir]
+    cmds:
+      - echo "Building for macOS Apple Silicon (arm64)..."
+      - GOOS=darwin GOARCH=arm64 go build -ldflags="{{.LDFLAGS}}" -o {{.BIN_DIR}}/{{.BINARY_NAME}}-darwin-arm64 {{.MAIN_FILE}}
+      - echo "✓ macOS Apple Silicon binary built successfully"
+
+  build-linux:
+    desc: Build Linux binary
+    deps: [ensure-bin-dir]
+    cmds:
+      - echo "Building for Linux (amd64)..."
+      - GOOS=linux GOARCH=amd64 go build -ldflags="{{.LDFLAGS}}" -o {{.BIN_DIR}}/{{.BINARY_NAME}}-linux-amd64 {{.MAIN_FILE}}
+      - echo "✓ Linux binary built successfully"
+
+  build-all:
+    desc: Build binaries for all platforms
+    deps: [clean]
+    cmds:
+      - echo "=== Building Timetag Correlation Analyzer ==="
+      - echo "Building binaries for all platforms..."
+      - echo ""
+      - task: build-windows
+      - task: build-macos-intel
+      - task: build-macos-arm
+      - task: build-linux
+      - task: build-current
+      - echo ""
+      - echo "=== Build Summary ==="
+      - echo "All binaries built successfully in bin/ directory:"
+      - ls -la {{.BIN_DIR}}/
+      - echo ""
+      - echo "Build flags used (strips debug info and reduces binary size)"
+      - echo "✓ All builds completed successfully!"
+
+  test:
+    desc: Run tests
+    cmds:
+      - go test ./...
+
+  fmt:
+    desc: Format Go code
+    cmds:
+      - go fmt ./...
+
+  mod-tidy:
+    desc: Tidy go modules
+    cmds:
+      - go mod tidy
+
+  install-task:
+    desc: Install Task runner (if not already installed)
+    cmds:
+      - |
+        if ! command -v task &> /dev/null; then
+          echo "Installing Task runner..."
+          if [[ "$OSTYPE" == "darwin"* ]]; then
+            if command -v brew &> /dev/null; then
+              brew install go-task/tap/go-task
+            else
+              echo "Please install Homebrew first: https://brew.sh/"
+              exit 1
+            fi
+          elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+            if command -v snap &> /dev/null; then
+              sudo snap install task --classic
+            else
+              echo "Please install Task manually: https://taskfile.dev/installation/"
+              exit 1
+            fi
+          else
+            echo "Please install Task manually: https://taskfile.dev/installation/"
+            exit 1
+          fi
+        else
+          echo "Task is already installed"
+        fi
+
+  setup:
+    desc: Setup development environment
+    cmds:
+      - task: install-task
+      - task: mod-tidy
+      - echo "Development environment setup complete!"
+
+  help:
+    desc: Show available tasks
+    cmds:
+      - task --list-all

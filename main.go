@@ -182,11 +182,19 @@ func streamCalculateAndWrite(timeTagsChan <-chan ttbin.TimeTag, channel1, channe
 	var batch []ttbin.TimeTag
 	var lastEvent *ttbin.TimeTag
 	totalDiffs := 0
+	totalTags := 0
 
 	fmt.Println("Streaming calculation and writing results...")
+	fmt.Printf("Progress: [Time Tags Processed: %d, Time Differences: %d]\n", totalTags, totalDiffs)
 
 	for tag := range timeTagsChan {
 		batch = append(batch, tag)
+		totalTags++
+
+		// Show progress for every 1000 tags processed
+		if totalTags%1000 == 0 {
+			fmt.Printf("\rProgress: [Time Tags Processed: %d, Time Differences: %d]", totalTags, totalDiffs)
+		}
 
 		// Process batch when it reaches size limit
 		if len(batch) >= BatchSize {
@@ -197,11 +205,9 @@ func streamCalculateAndWrite(timeTagsChan <-chan ttbin.TimeTag, channel1, channe
 			// Clear batch to free memory
 			batch = batch[:0]
 
-			// Print progress
-			if totalDiffs%1000 == 0 && totalDiffs > 0 {
-				fmt.Printf("  Processed %d time differences...\n", totalDiffs)
-				writer.Flush() // Ensure data is written regularly
-			}
+			// Update progress display with both metrics
+			fmt.Printf("\rProgress: [Time Tags Processed: %d, Time Differences: %d]", totalTags, totalDiffs)
+			writer.Flush() // Ensure data is written regularly
 		}
 	}
 
@@ -211,12 +217,15 @@ func streamCalculateAndWrite(timeTagsChan <-chan ttbin.TimeTag, channel1, channe
 		totalDiffs += count
 	}
 
+	// Final progress update
+	fmt.Printf("\rProgress: [Time Tags Processed: %d, Time Differences: %d]\n", totalTags, totalDiffs)
+
 	if totalDiffs == 0 {
 		return 0, fmt.Errorf("no events found for channels %d and %d", channel1, channel2)
 	}
 
 	writer.Flush()
-	fmt.Printf("✓ Streaming processing complete: %d time differences calculated\n", totalDiffs)
+	fmt.Printf("✓ Streaming processing complete: %d time tags processed, %d time differences calculated\n", totalTags, totalDiffs)
 	return totalDiffs, nil
 }
 
